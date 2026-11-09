@@ -1,0 +1,69 @@
+{
+  "data": {
+    "is_team_authorization": true,
+    "params": {
+      "model": "",
+      "text": "",
+      "voice#langgenius/openai/openai#gpt-4o-mini-tts-2025-12-15": "",
+      "voice#langgenius/openai/openai#tts-1": "",
+      "voice#langgenius/openai/openai#tts-1-hd": "",
+      "voice#langgenius/tongyi/tongyi#qwen3-tts-flash": ""
+    },
+    "plugin_id": null,
+    "plugin_unique_identifier": "",
+    "provider_icon": "https://cloud.dify.ai/console/api/workspaces/current/tool-provider/builtin/audio/icon",
+    "provider_id": "audio",
+    "provider_name": "audio",
+    "provider_show_name": "音频",
+    "provider_type": "builtin",
+    "selected": false,
+    "title": "文本转语音",
+    "tool_configurations": {
+      "model": {
+        "type": "constant",
+        "value": "langgenius/openai/openai#gpt-4o-mini-tts-2025-12-15"
+      },
+      "voice#langgenius/openai/openai#gpt-4o-mini-tts-2025-12-15": {
+        "type": "constant",
+        "value": "alloy"
+      },
+      "voice#langgenius/openai/openai#tts-1": {
+        "type": "constant",
+        "value": null
+      },
+      "voice#langgenius/openai/openai#tts-1-hd": {
+        "type": "constant",
+        "value": null
+      },
+      "voice#langgenius/tongyi/tongyi#qwen3-tts-flash": {
+        "type": "constant",
+        "value": null
+      }
+    },
+    "tool_description": "将文本转换为音频文件。",
+    "tool_label": "文本转语音",
+    "tool_name": "tts",
+    "tool_node_version": "2",
+    "tool_parameters": {
+      "text": {
+        "type": "mixed",
+        "value": null
+      }
+    },
+    "type": "tool"
+  },
+  "height": 192,
+  "id": "1793045341369",
+  "position": {
+    "x": 382,
+    "y": 282
+  },
+  "positionAbsolute": {
+    "x": 382,
+    "y": 282
+  },
+  "sourcePosition": "right",
+  "targetPosition": "left",
+  "type": "custom",
+  "width": 242
+}

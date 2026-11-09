@@ -1,0 +1,20 @@
+.env
+.env.*
+!.env.example
+research/
+data/
+media/*
+!media/.gitkeep
+__pycache__/
+*.pyc
+
+# Workstation and development files
+.DS_Store
+.pytest_cache/
+.workbuddy/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.ifpkg
+/luma-backup/
+/luma-restored/

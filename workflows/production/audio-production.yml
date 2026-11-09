@@ -1,0 +1,318 @@
+{
+  "version": "0.7.0",
+  "kind": "app",
+  "app": {
+    "name": "Luma · 流幕配音",
+    "mode": "workflow",
+    "icon": "🎬",
+    "icon_background": "#E4EDFB",
+    "description": "逐句角色配音：按工作室冻结的对白与预设音色生成，一次只合成一句或一个说话人，不自动重试。",
+    "use_icon_as_answer_icon": false
+  },
+  "dependencies": [],
+  "workflow": {
+    "conversation_variables": [],
+    "environment_variables": [],
+    "features": {
+      "file_upload": {
+        "enabled": false
+      },
+      "opening_statement": "",
+      "retriever_resource": {
+        "enabled": false
+      },
+      "sensitive_word_avoidance": {
+        "enabled": false
+      },
+      "speech_to_text": {
+        "enabled": false
+      },
+      "suggested_questions": [],
+      "suggested_questions_after_answer": {
+        "enabled": false
+      },
+      "text_to_speech": {
+        "enabled": false
+      }
+    },
+    "graph": {
+      "nodes": [
+        {
+          "id": "start",
+          "type": "custom",
+          "position": {
+            "x": 0,
+            "y": 180
+          },
+          "width": 242,
+          "height": 100,
+          "sourcePosition": "right",
+          "targetPosition": "left",
+          "data": {
+            "type": "start",
+            "title": "工作室镜头快照",
+            "selected": false,
+            "variables": [
+              {
+                "variable": "context",
+                "label": "镜头上下文 JSON",
+                "type": "paragraph",
+                "required": true,
+                "max_length": 100000
+              },
+              {
+                "variable": "reference_files",
+                "label": "参考文件（此单人配音不使用视觉参考）",
+                "type": "file-list",
+                "required": false,
+                "allowed_file_types": [
+                  "image",
+                  "audio",
+                  "video"
+                ],
+                "allowed_file_upload_methods": [
+                  "local_file",
+                  "remote_url"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "intake",
+          "type": "custom",
+          "position": {
+            "x": 310,
+            "y": 180
+          },
+          "width": 242,
+          "height": 100,
+          "sourcePosition": "right",
+          "targetPosition": "left",
+          "data": {
+            "type": "code",
+            "title": "校验目标镜头、对白与说话人",
+            "selected": false,
+            "code_language": "python3",
+            "code": "import json\ndef main(context):\n    p = json.loads(context)\n    if not isinstance(p, dict) or type(p.get('revision')) is not int:\n        raise ValueError('缺少项目版本')\n    target = p.get('target_shot_id')\n    shots = [s for s in p.get('shots', []) if s.get('id') == target]\n    if not target or len(shots) != 1:\n        raise ValueError('须指定唯一目标镜头')\n    shot = shots[0]\n    speech = p.get('speech') or {}\n    lines = shot.get('lines')\n    line_id = speech.get('line_id')\n    if line_id:\n        lines = [line for line in lines or [] if line.get('id') == line_id]\n        if len(lines) != 1: raise ValueError('目标对白不存在')\n    if lines:\n        if any(not isinstance(line.get('text'), str) or not line['text'].strip() for line in lines):\n            raise ValueError('对白内容无效')\n        speakers = {line.get('speaker_asset_id') for line in lines}\n        if len(speakers) > 1:\n            raise ValueError('当前配音连接只支持单一说话人；多角色音色尚未配置，未调用模型')\n        text = '\\n'.join(line['text'].strip() for line in lines)\n    else:\n        text = shot.get('dialogue', '').strip()\n    if not 1 <= len(text) <= 4000:\n        raise ValueError('配音对白须为1到4000字，未调用模型')\n    if speech and speech.get('text') != text: raise ValueError('对白快照不一致')\n    voice = speech.get('voice_id', 'alloy')\n    if voice not in ('alloy','ash','ballad','coral','echo','fable','onyx','nova','sage','shimmer','verse','marin','cedar'):\n        raise ValueError('音色无效')\n    return {'text': text, 'voice_id':voice, 'line_id':line_id or '', 'source_revision': p['revision'], 'target_shot_id': target}\n",
+            "variables": [
+              {
+                "variable": "context",
+                "value_selector": [
+                  "start",
+                  "context"
+                ]
+              }
+            ],
+            "outputs": {
+              "text": {
+                "type": "string",
+                "children": null
+              },
+              "voice_id": {
+                "type": "string",
+                "children": null
+              },
+              "line_id": {
+                "type": "string",
+                "children": null
+              },
+              "source_revision": {
+                "type": "number",
+                "children": null
+              },
+              "target_shot_id": {
+                "type": "string",
+                "children": null
+              }
+            }
+          }
+        },
+        {
+          "data": {
+            "is_team_authorization": true,
+            "params": {
+              "model": "",
+              "text": "",
+              "voice#langgenius/openai/openai#gpt-4o-mini-tts-2025-12-15": "",
+              "voice#langgenius/openai/openai#tts-1": "",
+              "voice#langgenius/openai/openai#tts-1-hd": "",
+              "voice#langgenius/tongyi/tongyi#qwen3-tts-flash": ""
+            },
+            "plugin_id": null,
+            "plugin_unique_identifier": "",
+            "provider_icon": "https://cloud.dify.ai/console/api/workspaces/current/tool-provider/builtin/audio/icon",
+            "provider_id": "audio",
+            "provider_name": "audio",
+            "provider_show_name": "音频",
+            "provider_type": "builtin",
+            "selected": false,
+            "title": "角色预设音色配音",
+            "tool_configurations": {
+              "model": {
+                "type": "constant",
+                "value": "langgenius/openai/openai#gpt-4o-mini-tts-2025-12-15"
+              },
+              "voice#langgenius/openai/openai#gpt-4o-mini-tts-2025-12-15": {
+                "type": "variable",
+                "value": [
+                  "intake",
+                  "voice_id"
+                ]
+              },
+              "voice#langgenius/openai/openai#tts-1": {
+                "type": "constant",
+                "value": null
+              },
+              "voice#langgenius/openai/openai#tts-1-hd": {
+                "type": "constant",
+                "value": null
+              },
+              "voice#langgenius/tongyi/tongyi#qwen3-tts-flash": {
+                "type": "constant",
+                "value": null
+              }
+            },
+            "tool_description": "将文本转换为音频文件。",
+            "tool_label": "文本转语音",
+            "tool_name": "tts",
+            "tool_node_version": "2",
+            "tool_parameters": {
+              "text": {
+                "type": "mixed",
+                "value": "{{#intake.text#}}"
+              }
+            },
+            "type": "tool",
+            "retry_config": {
+              "retry_enabled": false,
+              "max_retries": 0,
+              "retry_interval": 1000
+            }
+          },
+          "height": 192,
+          "id": "tts",
+          "position": {
+            "x": 620,
+            "y": 180
+          },
+          "sourcePosition": "right",
+          "targetPosition": "left",
+          "type": "custom",
+          "width": 242
+        },
+        {
+          "id": "end",
+          "type": "custom",
+          "position": {
+            "x": 930,
+            "y": 180
+          },
+          "width": 242,
+          "height": 100,
+          "sourcePosition": "right",
+          "targetPosition": "left",
+          "data": {
+            "type": "end",
+            "title": "返回音频与来源版本",
+            "selected": false,
+            "outputs": [
+              {
+                "variable": "result",
+                "value_selector": [
+                  "tts",
+                  "files"
+                ],
+                "value_type": "array[file]"
+              },
+              {
+                "variable": "source_revision",
+                "value_selector": [
+                  "intake",
+                  "source_revision"
+                ],
+                "value_type": "number"
+              },
+              {
+                "variable": "target_shot_id",
+                "value_selector": [
+                  "intake",
+                  "target_shot_id"
+                ],
+                "value_type": "string"
+              },
+              {
+                "variable": "voice_id",
+                "value_selector": [
+                  "intake",
+                  "voice_id"
+                ],
+                "value_type": "string"
+              },
+              {
+                "variable": "line_id",
+                "value_selector": [
+                  "intake",
+                  "line_id"
+                ],
+                "value_type": "string"
+              }
+            ]
+          }
+        }
+      ],
+      "edges": [
+        {
+          "id": "start-intake",
+          "source": "start",
+          "target": "intake",
+          "sourceHandle": "source",
+          "targetHandle": "target",
+          "type": "custom",
+          "zIndex": 0,
+          "data": {
+            "sourceType": "start",
+            "targetType": "code",
+            "isInIteration": false,
+            "isInLoop": false
+          }
+        },
+        {
+          "id": "intake-tts",
+          "source": "intake",
+          "target": "tts",
+          "sourceHandle": "source",
+          "targetHandle": "target",
+          "type": "custom",
+          "zIndex": 0,
+          "data": {
+            "sourceType": "code",
+            "targetType": "tool",
+            "isInIteration": false,
+            "isInLoop": false
+          }
+        },
+        {
+          "id": "tts-end",
+          "source": "tts",
+          "target": "end",
+          "sourceHandle": "source",
+          "targetHandle": "target",
+          "type": "custom",
+          "zIndex": 0,
+          "data": {
+            "sourceType": "tool",
+            "targetType": "end",
+            "isInIteration": false,
+            "isInLoop": false
+          }
+        }
+      ],
+      "viewport": {
+        "x": 0,
+        "y": 0,
+        "zoom": 0.65
+      }
+    }
+  }
+}
