@@ -208,6 +208,56 @@ def speech_request(snapshot,line_id=None):
     return {'line_id':line_id,'speaker_asset_id':speaker,'text':text,'voice_id':(version or {}).get('voice_id','alloy'),
             'model':'gpt-4o-mini-tts-2025-12-15'}
 
+def speech_basis(p,s,line_id):
+    speech=speech_request({'shots':[s],'target_shot_id':s['id'],'assets':p['assets']},line_id)
+    speaker=speech['speaker_asset_id']
+    return digest({k:speech[k] for k in ('line_id','speaker_asset_id','text','voice_id')}
+                  | {'voice_version':s.get('asset_bindings',{}).get(speaker)})
+
+
+def audio_take_issue(p,s,take,line_id):
+    if take.get('line_id')!=line_id and (take.get('line_id') or take.get('source')!='import'):
+        return '这条音轨属于其他对白或整镜配音，请选用对应音轨'
+    if take.get('source')=='import':
+        return None
+    try:
+        if take.get('speech_basis'):
+            matches=take['speech_basis']==speech_basis(p,s,line_id)
+        else:
+            # Earlier jobs froze only the semantic shot, without preparation or candidates.
+            matches=take.get('basis')==take_basis(semantic_shot(s))
+    except ValueError:
+        matches=False
+    return None if matches else '这条音轨来自旧版对白或音色，请重新配音或导入音轨'
+
+
+def selected_audio(s):
+    takes={t['id']:t for t in s.get('takes',[]) if t['kind']=='audio'}
+    whole=takes.get(s.get('selected_takes',{}).get('audio'))
+    if not whole and s.get('audio'):
+        whole=next((t for t in takes.values() if t['file']==s['audio']),None)
+    if whole:yield None,whole
+    for line in s.get('lines') or []:
+        take=takes.get(line.get('audio_take_id'))
+        if take:yield line['id'],take
+
+
+def update_audio_selection(p,s,before=None):
+    old={line_id:take['id'] for line_id,take in selected_audio(before or {})}
+    for line_id,take in list(selected_audio(s)):
+        issue=audio_take_issue(p,s,take,line_id)
+        if not issue:continue
+        if old.get(line_id)!=take['id']:raise ValueError(issue)
+        if s.get('locked'):continue  # Readiness still blocks an old, invalid selection on a locked shot.
+        if line_id is None:
+            s['selected_takes'].pop('audio',None)
+            s.pop('audio',None)
+        else:
+            line=next(l for l in s['lines'] if l['id']==line_id)
+            for field in ('audio_take_id','audio_duration','audio_start'):line.pop(field,None)
+        s.update(approved=False,needs_review=True)
+
+
 def audio_schedule(s,duration_lookup=None):
     lines=s.get('lines') or []
     if not any(l.get('audio_take_id') for l in lines):return []
@@ -262,13 +312,70 @@ def readiness(p, episode_id):
     state_status=creative.continuity_status(p,episode_id)
     for i,s in enumerate(snap['shots'],1):
         has_visual=bool(s.get('image') or s.get('video'))
-        audio_issue=None
-        try:line_audio=audio_schedule(s)
-        except ValueError as e:audio_issue=str(e);line_audio=[]
+        stale_media=media_issue(s)
+        checks=[]
+        def check(status, label, action):
+            checks.append({'status':status,'label':label,'action':action})
+        if stale_media:check('blocked',stale_media,'media')
+        elif not has_visual:
+            partial=any(t['kind'] in ('image','video') and t.get('generation_segment')
+                        and (t['generation_segment']['start']!=0 or abs(t['generation_segment']['end']-s['duration'])>.001)
+                        for t in s.get('takes',[]))
+            check('blocked','尚未选用整镜画面，可拼接已有片段或导入画面' if partial else '尚未选用画面',
+                  'make' if partial else 'media')
+        else:check('reuse','已选画面可沿用','media')
+
         prep_issue=preparation.current_issue(p,s)
-        ready=not prep_issue and has_visual and s.get('approved') and not s.get('needs_review') and not audio_issue and not state_status['requires_confirmation']
-        items.append({'shot_id':s['id'],'number':i,'has_visual':has_visual,'ready':bool(ready),'basis':take_basis(s),
-                      'reason':state_status['reason'] or prep_issue or audio_issue or ('尚未选用画面' if not has_visual else '需要复核' if s.get('needs_review') else '尚未审核' if not s.get('approved') else None),
+        if prep_issue and not state_status['requires_confirmation']:check('blocked',prep_issue,'make')
+        segments=(s.get('preparation') or {}).get('segments',[])
+        sources=s.get('segment_sources',{})
+        basis=take_basis(s)
+        if segments and (sources or not has_visual):
+            reusable=[];review=[];missing=[]
+            for number,segment in enumerate(segments,1):
+                source=sources.get(segment['id'])
+                (missing if not source else review if prep_issue or source.get('basis')!=basis else reusable).append(str(number))
+            for numbers, status, label in (
+                (review,'review','需重新确认后才能拼接'), (missing,'optional','尚未选用素材'), (reusable,'reuse','素材可沿用')
+            ):
+                if numbers:check(status,'片段 '+ '、'.join(numbers)+' '+label,'make')
+
+        selected=dict(selected_audio(s))
+        line_audio=[]
+        audio_issue=None
+        lines=s.get('lines') or []
+        invalid_lines=set()
+        for line_id,take in selected.items():
+            issue=audio_take_issue(p,s,take,line_id)
+            if issue:
+                invalid_lines.add(line_id)
+                audio_issue=audio_issue or issue
+                number=next((n for n,line in enumerate(lines,1) if line['id']==line_id),None)
+                check('blocked',(f'第 {number} 句：' if number else '整镜音轨：')+issue,'dialogue')
+        missing_lines=[str(n) for n,line in enumerate(lines,1) if line['id'] not in selected]
+        try:
+            line_audio=audio_schedule(s)
+        except ValueError as e:
+            audio_issue=audio_issue or str(e)
+            if not missing_lines or not str(e).startswith('逐句配音尚未齐备'):check('blocked',str(e),'dialogue')
+        if s.get('audio') and None not in invalid_lines:
+            check('reuse','整镜音轨可沿用','dialogue')
+        elif lines:
+            kept=[str(n) for n,line in enumerate(lines,1) if line['id'] in selected and line['id'] not in invalid_lines]
+            if kept:check('reuse','第 '+ '、'.join(kept)+' 句音轨可沿用','dialogue')
+            if missing_lines:
+                suffix='，可仅用字幕' if not selected else ''
+                check('optional' if not selected else 'blocked','第 '+ '、'.join(missing_lines)+' 句尚未选用音轨'+suffix,'dialogue')
+        elif s.get('dialogue') and not s.get('audio'):
+            check('optional','对白尚未配音，可仅用字幕','dialogue')
+
+        review_reason='需要复核' if s.get('needs_review') else '尚未审核' if not s.get('approved') else None
+        if review_reason:check('blocked',review_reason,'shot')
+        ready=not prep_issue and not any(c['status']=='blocked' for c in checks) and not state_status['requires_confirmation']
+        items.append({'shot_id':s['id'],'number':i,'has_visual':has_visual,'ready':ready,'basis':basis,
+                      'stale_media':bool(stale_media),'checks':checks,
+                      'reason':state_status['reason'] or prep_issue or stale_media or audio_issue or
+                               ('尚未选用画面' if not has_visual else review_reason),
                       'audio_schedule':line_audio,'dialogue_without_audio':bool(s.get('dialogue') and not s.get('audio') and not line_audio)})
     refs=[(a,v) for a in p['assets'] for v in a['versions'] if v['id']==a['selected_version'] and (v.get('file') or v.get('views'))]
     return {'episode_id':episode_id,'script_ready':bool(snap['script'].strip()),'asset_count':len(p['assets']),
@@ -427,6 +534,15 @@ def apply_plan_text(target, incoming, fields):
     if 'lines' not in incoming and 'dialogue' in incoming and incoming['dialogue']!=target.get('dialogue',''):
         target.pop('lines',None)
     target.update({k:copy.deepcopy(incoming[k]) for k in fields if k in incoming and k!='creative_spec'})
+    if 'lines' in incoming and 'lines' in fields and isinstance(target.get('lines'),list):
+        prior_lines={line['id']:line for line in before.get('lines') or []}
+        for line in target['lines']:
+            if not isinstance(line,dict):continue
+            prior=prior_lines.get(line.get('id'),{})
+            for key in ('audio_take_id','audio_duration','audio_start'):
+                line.pop(key,None)
+                if key in prior and all(line.get(k)==prior.get(k) for k in ('text','speaker_asset_id')):
+                    line[key]=prior[key]
     if 'creative_spec' in incoming and 'creative_spec' in fields:target['creative_spec']=creative.merge_spec(before,incoming['creative_spec'])
     creative.synchronize(target,before)
     clear_stale_audio(target,before)
@@ -471,10 +587,46 @@ def semantic_shot(s):
 
 def take_basis(s):return digest({**semantic_shot(s),**({'preparation':s['preparation']} if 'preparation' in s else {})})
 
-def add_take(s, kind, file, label='导入素材', source='import', basis=None, job_id=None):
+def content_basis(s):
+    """What the picture shows: not dialogue (audio has its own invalidation) nor how it will be generated."""
+    fields={k:v for k,v in semantic_shot(s).items() if k not in ('dialogue','lines')}
+    if isinstance(fields.get('creative_spec'),dict):fields['creative_spec']={k:v for k,v in fields['creative_spec'].items() if k not in ('dialogue','sound')}
+    return digest(fields)
+
+def selected_visual_take(s):
+    """The candidate whose picture the shot currently delivers, or None."""
+    clip=clip_of(s)
+    if not clip:return None
+    return next((t for t in s.get('takes',[]) if t['id']==clip['source_take_id']),None)
+
+def visual_selection(s):
+    return (s.get('image'),s.get('video'),copy.deepcopy(s.get('clip')),s.get('trim_start',0))
+
+
+def stamp_media(old_shots, p, confirmed=None):
+    """Record which version of the shot each selected picture belongs to; unchanged picks keep their record."""
+    for s in p['shots']:
+        before=old_shots.get(s['id'])
+        if not (s.get('image') or s.get('video')):
+            s.pop('media_basis',None);continue
+        if confirmed==s['id']:continue
+        if before and visual_selection(before)==visual_selection(s):
+            if not s.get('media_basis'):s['media_basis']=before.get('media_basis') or content_basis(before)
+            continue
+        t=selected_visual_take(s)
+        s['media_basis']=(t or {}).get('shot_basis') or content_basis(s)
+
+MEDIA_STALE='画面来自修改前的镜头版本，请确认沿用或更换'
+
+def media_issue(s):
+    """A picture chosen for an earlier version of the shot needs an explicit decision before review."""
+    if not (s.get('image') or s.get('video')) or not s.get('media_basis'):return None
+    return MEDIA_STALE if s['media_basis']!=content_basis(s) else None
+
+def add_take(s, kind, file, label='导入素材', source='import', basis=None, job_id=None, shot_basis=None):
     if s.get('locked'):raise ValueError('请先解除镜头锁定')
     if job_id and any(t.get('job_id')==job_id for t in s['takes']):return
-    t={'id':uuid.uuid4().hex,'kind':kind,'file':file,'label':label[:100],'source':source,'created':time.time(),'basis':basis or take_basis(s),'job_id':job_id}
+    t={'id':uuid.uuid4().hex,'kind':kind,'file':file,'label':label[:100],'source':source,'created':time.time(),'basis':basis or take_basis(s),'job_id':job_id,'shot_basis':shot_basis or content_basis(s)}
     s['takes'].append(t)
     return t
 

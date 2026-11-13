@@ -2,7 +2,6 @@ import json, os, sqlite3, subprocess, unittest
 from pathlib import Path
 from unittest.mock import patch
 import studio, production, test_studio
-from providers import Dify
 
 
 class FullAuditTests(unittest.TestCase):
@@ -20,14 +19,10 @@ class FullAuditTests(unittest.TestCase):
         self.assertFalse(production.readiness(self.p,self.p['episodes'][0]['id'])['shots'][0]['dialogue_without_audio'])
 
     def test_delete_last_line_stays_empty_in_editor(self):
-        source=Path('web/editor-ui.js').read_text()
-        script='''const vm=require('node:vm');const hidden={value:'old'};const del={dataset:{lineDel:'0'}};
-let focused=false;const add={focus(){focused=true}};
-const ctx={window:{addEventListener(){}},document:{querySelectorAll(s){return s==='[data-line-del]'?[del]:[]}},
- $:s=>s==='#line-add'?add:hidden,requestAnimationFrame(fn){fn()},bind(){},readLines(){return [{id:'l',text:'旧句'}]},rememberDraft(){},render(){}};
-vm.createContext(ctx);vm.runInContext(SOURCE,ctx);ctx.readLines=()=>[{id:'l',text:'旧句'}];ctx.bindLines({});del.onclick();
-if(hidden.value!=='[]')throw Error('删除最后一句后返回了 '+hidden.value+'，应保留空逐句模式');
-if(!focused)throw Error('删除最后一句后应聚焦添加对白');'''
+        source=Path('web/js/logic.js').read_text()
+        script=('const vm=require("node:vm");const c=vm.createContext({});vm.runInContext(SOURCE,c);'
+            'const out=c.L.removeLine([{id:"l",text:"旧句"}],0);'
+            'if(!Array.isArray(out)||out.length!==0)throw Error("删除最后一句后应保留空的逐句列表");')
         result=subprocess.run(['node','-e',script.replace('SOURCE',json.dumps(source))],capture_output=True,text=True)
         self.assertEqual(result.returncode,0,result.stderr)
 
@@ -35,7 +30,7 @@ if(!focused)throw Error('删除最后一句后应聚焦添加对白');'''
         self.add_shot()
         cases=[{}, {'dialogue':' '*5}, {'dialogue':'字'*4001}, {'lines':[
             {'id':'a','speaker_asset_id':'hero','text':'你好'}, {'id':'b','speaker_asset_id':None,'text':'旁白'}]}]
-        with patch.dict(os.environ,{'DIFY_AUDIO_KEY':'local-test'}):
+        with patch.dict(os.environ,{'OPENAI_API_KEY':'sk-offline'}):
             for fields in cases:
                 self.p=studio.project(self.p['id']);self.p['shots'][0].update(fields)
                 self.p=studio.save(self.p,self.p['revision'])
@@ -58,11 +53,11 @@ if(!focused)throw Error('删除最后一句后应聚焦添加对白');'''
 
     def test_removed_key_does_not_consume_authorization(self):
         self.add_shot()
-        with patch.dict(os.environ,{'DIFY_AUDIO_KEY':'local-test'}):
+        with patch.dict(os.environ,{'OPENAI_API_KEY':'sk-offline'}):
             self.p['shots'][0]['dialogue']='你好'
             self.p=studio.save(self.p,self.p['revision'])
             jid=studio.enqueue(self.p['id'],'audio',{'shot_id':'s1'},'removed-key')
-        with patch.dict(os.environ,{'DIFY_AUDIO_KEY':''}), patch.object(Dify,'run') as run:
+        with patch.dict(os.environ,{'OPENAI_API_KEY':''}), patch('openai_direct.open_realtime') as run:
             studio.work_once();run.assert_not_called()
         self.assertEqual(studio.spending()['used'],0)
 

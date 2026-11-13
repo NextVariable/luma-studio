@@ -1,15 +1,36 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>流幕 Luma · AI 漫剧工作室</title><link rel="stylesheet" href="/studio.css"></head><body>
-<div class="studio-atmosphere" aria-hidden="true"><i></i><i></i></div>
-<header class="studio-header"><a class="brand" href="/" aria-label="流幕 Luma 工作室"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span><span>Luma<span class="brand-tag">流幕</span></span></a><div class="project-switch"><span aria-hidden="true">/</span><select id="projects" aria-label="切换作品"></select></div><nav class="workspace-tabs" aria-label="作品工作区"><button id="open-story"><span class="tab-number">01</span><span>剧本</span></button><button id="open-shots"><span class="tab-number">02</span><span>镜头</span></button><button id="open-assets"><span class="tab-number">03</span><span>素材</span></button><button id="open-delivery"><span class="tab-number">04</span><span>成片</span></button><span id="tab-cursor" aria-hidden="true" hidden></span></nav><nav id="nav" aria-label="工作室导航"><button data-view="library" aria-label="作品" title="作品"><img class="ui-icon" src="/icons/layout-grid.svg" alt="" aria-hidden="true"><span>作品</span></button><button data-view="jobs" aria-label="生成记录" title="生成记录"><img class="ui-icon" src="/icons/history.svg" alt="" aria-hidden="true"><span>生成记录</span><i id="jobcount">0</i></button><button data-view="settings" aria-label="设置" title="设置"><img class="ui-icon" src="/icons/adjustments-horizontal.svg" alt="" aria-hidden="true"><span>设置</span></button></nav><div class="head-right"><span id="connection">本地工作区</span><button id="new">新建作品</button></div></header>
-<div class="layout"><main><div class="project-bar"><h1 id="title" class="sr-only">选择作品</h1><div id="episodebar" class="episode-bar" hidden><label for="episodes" class="sr-only">剧集</label><select id="episodes" aria-label="选择剧集"></select><span id="episode-summary"></span><button id="episode-continuity" class="text-button" hidden>确认承接</button><details class="episode-options"><summary>剧集选项</summary><div class="actions"><button id="rename-episode">重命名</button><button id="add-episode">新建一集</button></div></details></div></div><section id="content"></section><nav id="workspace-stepper" aria-label="上下切换工作区" hidden><button id="step-back" class="text-button"></button><span id="scroll-cue" role="status"></span><button id="step-next" class="text-button"></button></nav></main></div><div id="toast" role="status"></div><div id="edge-switch-feedback" data-active="false" aria-hidden="true"></div>
-<dialog id="continuitydialog" class="form-sheet" aria-labelledby="continuity-title">
-<form id="continuity-form">
-<header class="sheet-heading"><h2 id="continuity-title">确认剧集承接</h2><button type="button" class="icon-button" data-close-sheet aria-label="关闭窗口"><img class="ui-icon" src="/icons/x.svg" alt="" aria-hidden="true"></button></header>
-<section class="sheet-body">
-<p id="continuity-note"></p><div id="continuity-diff"></div>
-<label id="continuity-choice">本集如何承接<select id="continuity-resolution"><option value="inherit">继承上集状态</option><option value="keep">保留本集原状态</option></select></label>
-<label id="continuity-reason-label" hidden>保留原因<textarea id="continuity-reason" rows="2" maxlength="2000"></textarea></label>
-</section>
-<footer class="form-footer"><button type="button" class="text-button" id="continuity-upstream" hidden>查看上集</button><button type="submit" id="continuity-confirm">确认承接</button></footer>
-</form></dialog>
-<dialog id="projectnamedialog" aria-labelledby="project-name-title" class="form-sheet"><form id="project-name-form"><header class="sheet-heading"><h2 id="project-name-title">作品名称</h2><button type="button" class="icon-button" data-close-sheet aria-label="关闭窗口"><img class="ui-icon" src="/icons/x.svg" alt="" aria-hidden="true"></button></header><section class="sheet-body"><label>名称<input id="project-name" autofocus required maxlength="200" autocomplete="off"></label></section><div class="actions"><button type="button" id="project-name-cancel">取消</button><button type="submit" class="primary">保存名称</button></div></form></dialog><dialog id="newdialog" aria-labelledby="new-title" class="form-sheet"><form id="newform"><header class="sheet-heading"><h2 id="new-title">新建作品</h2><button type="button" class="icon-button" data-close-sheet aria-label="关闭窗口"><img class="ui-icon" src="/icons/x.svg" alt="" aria-hidden="true"></button></header><section class="sheet-body"><label>作品名称<input name="title" autofocus required maxlength="200" placeholder="例如：末班渡轮"></label><details class="new-work-script"><summary>添加已有剧本（可稍后）</summary><label>第一集剧本<textarea name="script" rows="5" placeholder="粘贴小说、故事或剧本。"></textarea></label></details></section><div class="actions"><button type="button" id="close">取消</button><button class="primary">创建作品</button></div></form></dialog><dialog id="episodedialog" aria-labelledby="episode-dialog-title" class="form-sheet"><form id="episodeform"><header class="sheet-heading"><h2 id="episode-dialog-title">新建一集</h2><button type="button" class="icon-button" data-close-sheet aria-label="关闭窗口"><img class="ui-icon" src="/icons/x.svg" alt="" aria-hidden="true"></button></header><section class="sheet-body"><label>剧集名称<input id="episode-name" autofocus required maxlength="100" autocomplete="off"></label></section><div class="actions"><button type="button" id="episode-close">取消</button><button class="primary">保存剧集</button></div></form></dialog><dialog id="assetdialog" aria-labelledby="asset-title" class="form-sheet"><form id="assetform"><header class="sheet-heading"><h2 id="asset-title">新增素材</h2><button type="button" class="icon-button" data-close-sheet aria-label="关闭窗口"><img class="ui-icon" src="/icons/x.svg" alt="" aria-hidden="true"></button></header><section class="sheet-body"><label>素材名称<input name="name" autofocus required maxlength="200"></label><label>素材类型<select name="kind"><option value="character">角色</option><option value="scene">场景</option><option value="prop">道具</option><option value="style">视觉风格</option><option value="voice">声音</option></select></label><label>外观与风格<textarea name="description" rows="4"></textarea></label></section><div class="actions"><button type="button" id="asset-close">取消</button><button class="primary">添加素材</button></div></form></dialog><dialog id="adoptdialog" aria-labelledby="adopt-title" class="form-sheet"><form method="dialog"><header class="sheet-heading"><h2 id="adopt-title">采纳整集分镜方案</h2><button type="button" class="icon-button" data-close-sheet aria-label="关闭窗口"><img class="ui-icon" src="/icons/x.svg" alt="" aria-hidden="true"></button></header><section class="sheet-body"><label>采纳方式<select id="adopt-mode"><option value="append">追加到现有镜头之后</option><option value="merge">按序合并：只更新文字，保留素材</option><option value="replace">整版替换：换掉本集全部镜头</option></select></label><p id="adopt-note" class="muted"></p><ol id="adopt-list" class="adopt-list"></ol><p id="adopt-blocked" class="candidate-warning" role="status" hidden></p></section><div class="actions"><button value="cancel">取消</button><button value="confirm" id="adopt-confirm" class="primary">采纳</button></div></form></dialog><dialog id="revisiondialog" aria-labelledby="revision-title" class="form-sheet"><form method="dialog"><header class="sheet-heading"><h2 id="revision-title">确认这一镜的修改</h2><button type="button" class="icon-button" data-close-sheet aria-label="关闭窗口"><img class="ui-icon" src="/icons/x.svg" alt="" aria-hidden="true"></button></header><section class="sheet-body"><p id="revision-note" class="muted"></p><div id="revision-diff" class="revision-diff"></div><p class="muted">只更新这一镜。原有画面和声音会保留，应用后需要重新确认这一镜。</p></section><div class="actions"><button value="cancel">暂不修改</button><button value="confirm" class="primary">确认修改</button></div></form></dialog><dialog id="confirmdialog" aria-labelledby="confirm-title" class="form-sheet"><form method="dialog"><header class="sheet-heading"><h2 id="confirm-title">确认制作操作</h2><button type="button" class="icon-button" data-close-sheet aria-label="关闭窗口"><img class="ui-icon" src="/icons/x.svg" alt="" aria-hidden="true"></button></header><section class="sheet-body"><p id="confirm-message"></p></section><div class="actions"><button value="cancel">取消</button><button value="confirm" class="primary">确认继续</button></div></form></dialog><script src="/creation-ui.js"></script><script src="/drama-import-ui.js"></script><script src="/preparation-ui.js"></script><script src="/editor-ui.js"></script><script src="/workspace-ui.js"></script><script src="/character-ui.js"></script><script src="/production-ui.js"></script><script src="/canvas-ui.js"></script><script src="/navigation-ui.js"></script><script src="/app.js"></script></body></html>
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Luma 流幕</title>
+<link rel="icon" type="image/png" sizes="128x128" href="assets/luma-mark.png?v=clapper-cutout">
+<link rel="stylesheet" href="studio.css">
+</head>
+<body>
+<div class="ambient" aria-hidden="true"><div class="ambient-veil"></div></div>
+<div class="app" id="app">
+  <nav class="rail" id="rail" aria-label="主导航"></nav>
+  <header class="topbar">
+    <div class="context" id="context"></div>
+    <div class="top-actions" id="top-actions"></div>
+  </header>
+  <main id="view" class="view" tabindex="-1"></main>
+</div>
+<aside class="drawer" id="drawer" aria-label="生成记录" hidden></aside>
+<dialog class="modal" id="modal"></dialog>
+<div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+<script src="js/core.js"></script>
+<script src="js/logic.js"></script>
+<script src="js/gesture.js"></script>
+<script src="js/library.js"></script>
+<script src="js/script.js"></script>
+<script src="js/cast.js"></script>
+<script src="js/shots.js"></script>
+<script src="js/delivery.js"></script>
+<script src="js/jobs.js"></script>
+<script src="js/settings.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

@@ -1,44 +1,59 @@
 # Luma Studio · 流幕
 
-A local-first workspace for episodic comics and short-film production. Organize scripts, character looks, shots, and dialogue, then cut and export an episode from selected media.
+[![CI](https://github.com/NextVariable/luma-studio/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/NextVariable/luma-studio/actions/workflows/ci.yml)
 
-[中文指南](README.zh-CN.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
+A local-first production workspace for episodic motion comics. Keep character looks, shots, and dialogue together, revise one shot at a time, and export the episode as an MP4.
 
-**Status: developer preview.** The local import-to-export path is available. Dify workflows for shot planning, shot revision, and voice are optional integrations that require your own Dify apps. Image and video generation require a supported provider integration. The local app starts with external generation paused.
+[简体中文](README.zh-CN.md) · [Architecture](docs/architecture.md) · [Provider setup](docs/providers.md) · [Contributing](CONTRIBUTING.md)
+
+**Developer preview.** The local production and delivery workflow works with imported media and requires no model account. Cloud generation adapters are available with your own credentials. A full cloud-generated episode has yet to pass end-to-end acceptance.
 
 ## Quick start
 
-Install Python 3.11+ and FFmpeg with `ffprobe` and the `libx264` encoder. No Python packages are needed.
+Requirements are **macOS or Linux**, **Python 3.11+**, and **FFmpeg** with `ffprobe` and the `libx264` encoder.
 
 ```sh
+git clone https://github.com/NextVariable/luma-studio.git
+cd luma-studio
 python3 studio.py check
 python3 studio.py
 ```
 
-Open [the local workspace](http://127.0.0.1:7820/). Create a work, enter a script, and add shots. Import and select a picture or clip for each shot, then review the shots and open **Delivery (成片)** to export the episode. You can attach dialogue audio or export with captions and the selected clip’s audio.
+Open [Luma Studio on localhost](http://127.0.0.1:7820/). The workspace currently uses a Chinese interface.
 
-## How it works
+1. Create a work in **作品** and add shots in **镜头**.
+2. Open **素材** on each shot to import and select a still or clip. Use **对白** to edit dialogue and attach an audio track.
+3. Review each shot. Open **成片** to see what is missing, jump to the relevant controls, and export the episode.
+4. After a revision, use the checklist to confirm which picture or audio can carry forward and export a new version. Previous exports remain available.
 
-- The browser workspace edits projects served from `studio.py`, which stores project versions and job state in SQLite.
-- Production preparation separates narrative shots from generation segments. Shot dependencies track changes that need review before delivery.
-- FFmpeg composes selected media, dialogue tracks, and an optional MP4 subtitle track.
-- The optional Dify adapter handles workflow runs and review handoffs. Import templates from [workflows/production](workflows/production/), configure the corresponding published app through Settings, and use the read-only connection check before authorizing calls.
+To reproduce the local revision and export flow with generated test fixtures, run `python3 -m unittest discover -s tests -p test_delivery_checklist.py -v`. This test runs FFmpeg locally and needs no API credentials.
 
-The server binds to loopback for single-user use. On macOS and Linux, stop the corresponding studio process before backing up. Use new destination directories:
+## Production workflow
 
-```sh
-python3 studio.py backup ./luma-backup
-AUTEUR_DATA=./luma-restored python3 studio.py restore ./luma-backup
-AUTEUR_DATA=./luma-restored python3 studio.py
-```
+| Stage | What you can do |
+| --- | --- |
+| Plan | Organize scripts by episode. Plan shots manually or connect a Dify director workflow with continuity review and a human approval step. |
+| Prepare | Pin character looks and reference images to each shot. Define generation segments, select candidates, and confirm what will be used. |
+| Revise | Compare a single-shot proposal before applying it. See which visuals and dialogue tracks can be reused, need review, or have been deselected. |
+| Deliver | Use the episode checklist to resolve blockers. Export an MP4 with the selected visuals, audio, and an optional subtitle track. |
 
-Backups include the database, media, and exported films. Restoration pauses external generation and interrupts unfinished remote jobs. Configure provider credentials separately on a new installation.
+## Optional model services
 
-## Development
+| Capability | Service |
+| --- | --- |
+| Director planning and approval | Dify |
+| Prepared image and video generation | fal with FLUX.1 Kontext Pro and Kling 2.5 Turbo Pro |
+| Dialogue synthesis and single-shot proposals | OpenAI direct connection. A previously configured Dify revision workflow remains an option for proposals. |
+
+See [provider setup](docs/providers.md) for credentials and workflow templates. New libraries start with generation paused. The confirmation dialog shows an estimated cost or billing method and the number of local authorizations required. Providers bill their own accounts.
+
+## Data and development
+
+Luma serves one local library on loopback. See [architecture and data](docs/architecture.md) for repository layout, backup, and restore.
 
 ```sh
 python3 -m unittest discover -s tests -v
 node --test tests/*.test.js
 ```
 
-Use Node.js 22+ for the JavaScript tests. The tests use local fixtures and do not require model credentials. See [third-party notices](THIRD_PARTY_NOTICES.md) for bundled assets and external dependencies.
+The JavaScript tests use Node.js 22+. See the [MIT license](LICENSE), [third-party notices](THIRD_PARTY_NOTICES.md), and [security reporting](SECURITY.md).

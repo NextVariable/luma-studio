@@ -18,3 +18,7 @@ __pycache__/
 *.ifpkg
 /luma-backup/
 /luma-restored/
+
+# Local Python environments
+.venv/
+venv/

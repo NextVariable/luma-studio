@@ -9,15 +9,23 @@ from episodes import normalize_project, validate_episodes, changed_episodes, pro
 import production
 import creative
 import preparation
+import fal_media
 import assembly
 import continuity
 import local_storage
+import openai_direct
+import generation_quote
 
 ROOT = Path(__file__).resolve().parent
 DATA = Path(os.environ.get('AUTEUR_DATA', ROOT/'data'))
 MEDIA = DATA/'media'
 DB = DATA/'studio.sqlite'
 LOCK = threading.RLock()
+# An explicit data directory is a separate library and keeps its own Dify settings.
+DATA_ISOLATED = 'AUTEUR_DATA' in os.environ
+
+def env_file():
+    return DATA/'.env' if DATA_ISOLATED else ROOT/'.env'
 
 def uid(): return uuid.uuid4().hex
 
@@ -33,6 +41,10 @@ def init():
         INSERT OR IGNORE INTO spending VALUES(1,0,0);
         ''')
         c.execute("UPDATE jobs SET state='interrupted',error='服务重启；外部调用结果待核实，避免重复收费',updated=? WHERE state IN ('running','submitting')",(time.time(),))
+        for row in c.execute("SELECT * FROM jobs WHERE kind='audio' AND state='interrupted'").fetchall():
+            result=json.loads(row['result'] or '{}')
+            if not result.get('candidate_file') and recover_direct_audio(row,json.loads(row['payload']),result):
+                c.execute("UPDATE jobs SET result=?,error=NULL WHERE id=?",(json.dumps(result),row['id']))
 
 class ClosingConnection(sqlite3.Connection):
     def __exit__(self,*args):
@@ -82,7 +94,7 @@ def validate_project(p):
         for field in ('video','audio'):
             if s.get(field): media_path(s[field])
 
-def save(p, expected, candidate_only=False, state_confirmation=None, source_confirmation=False):
+def save(p, expected, candidate_only=False, state_confirmation=None, source_confirmation=False, media_confirmation=None):
     submitted={s['id']:copy.deepcopy(s) for s in p['shots']}
     production.normalize(normalize_project(p))
     validate_project(p)
@@ -105,6 +117,7 @@ def save(p, expected, candidate_only=False, state_confirmation=None, source_conf
                 prev=oldshots.get(s['id'])
                 raw=submitted[s['id']]
                 if s.get('visual_review_basis')!=(prev or {}).get('visual_review_basis'):raise ValueError('不能直接改写画面复核记录')
+                if s.get('media_basis')!=(prev or {}).get('media_basis') and media_confirmation!=s['id']:raise ValueError('请通过「确认沿用画面」操作确认，不能直接改写画面确认记录')
                 if prev and prev.get('preparation') and not s.get('preparation'):raise ValueError('已有制作准备不能直接移除，请按当前镜头重新确认')
                 if s.get('segment_sources',{})!=(prev or {}).get('segment_sources',{}) and not source_confirmation:raise ValueError('请通过片段选用操作确认素材，不能直接改写确认记录')
                 prior_lines={l['id']:l for l in (prev or {}).get('lines') or []}
@@ -131,6 +144,7 @@ def save(p, expected, candidate_only=False, state_confirmation=None, source_conf
         creative.track_dependencies(old,p,state_confirmation)
         for s in p['shots']:
             before=next((x for x in (old or {}).get('shots',[]) if x['id']==s['id']),None)
+            production.update_audio_selection(p,s,before)
             if before and (s.get('preparation') or s.get('creative_spec') or s.get('continuity_from')) and continuity.basis(old,before)!=continuity.basis(p,s):s.update(approved=False,needs_review=True)
         for s in p['shots']:
             if creative.continuity_status(p,s['episode_id'])['requires_confirmation']:
@@ -138,10 +152,11 @@ def save(p, expected, candidate_only=False, state_confirmation=None, source_conf
                     prior=next((x for x in (old or {}).get('shots',[]) if x['id']==s['id']),{})
                     if not prior.get('approved') or prior.get('needs_review'):raise ValueError('跨集状态待确认，不能审核此镜头')
                 s.update(approved=False,needs_review=True)
+        production.stamp_media({x['id']:x for x in (old or {}).get('shots',[])},p,media_confirmation)
         for s in p['shots']:
             prior=next((x for x in (old or {}).get('shots',[]) if x['id']==s['id']),{})
             if submitted[s['id']].get('approved') and not submitted[s['id']].get('needs_review') and (not prior.get('approved') or prior.get('needs_review')):
-                issue=preparation.current_issue(p,s)
+                issue=preparation.current_issue(p,s) or production.media_issue(s)
                 if issue:raise ValueError(issue)
         validate_project(p)
         production.validate(p,media_path)
@@ -209,7 +224,9 @@ def open_preparation(pid,sid,kind='video'):
             'characters':[{'asset_id':a['id'],'version_id':s['asset_bindings'][a['id']],'name':a['name'],
                            'outfit':next(v for v in a['versions'] if v['id']==s['asset_bindings'][a['id']]).get('outfit','未设定')}
                           for a in p['assets'] if a['kind']=='character' and a['id'] in s['asset_bindings']],
-            'references':preparation.catalog(p,s),'models':copy.deepcopy(preparation.MODELS),
+            'references':preparation.catalog(p,s),'fal_configured':bool(fal_media.key()),
+            'models':{name:{**copy.deepcopy(model),'connected':bool(fal_media.key() if model.get('provider')=='fal' else key_for(model['kind']))}
+                      for name,model in preparation.MODELS.items()},
             'status':preparation.report(p,sid,media_path,lambda kind:bool(key_for(kind)))}
 
 def save_preparation(pid,sid,expected,plan,source_basis):
@@ -274,7 +291,7 @@ def preview_drama_import(bundle):
     return {'id':token,'digest':digest,'summary':preview['summary'],'warnings':preview['warnings'],
             'mapping':{'action':'画面描述','shotSize':'景别','cameraMovement':'运镜','dialogue':'逐句对白',
                        'narrativePurpose/composition/continuityIn/continuityOut/sound':'保留于镜头创作规格','characters/outfits/assets':'共享资产及固定造型版本'},
-            'sample':preview['project']['shots'][0]}
+            'sample':preview['project']['shots'][0],'shot_ids':[s['id'] for s in preview['project']['shots']],'asset_names':{a['id']:a['name'] for a in preview['project']['assets']}}
 
 def apply_drama_import(token,digest):
     with LOCK:
@@ -309,6 +326,55 @@ def adoption_preview(pid, jid, expected, mode='append'):
         episode_id=snapshot.get('episode_id') or p['episodes'][0]['id']
         return production.plan_adoption(p,episode_id,result['shots'],mode)
 
+def revision_media_impact(p,before,after):
+    rows=[]
+    visual_changed=production.content_basis(before)!=production.content_basis(after)
+    current_segments={seg['id']:(index,seg) for index,seg in enumerate((after.get('preparation') or {}).get('segments',[]),1)}
+    takes={t['id']:t for t in before.get('takes',[])}
+    def visual_quote(kind,segment=None):
+        if segment:
+            model=segment['model']
+            provider=preparation.MODELS.get(model,{}).get('provider')
+            if not provider:return None
+            duration=segment['end']-segment['start'] if kind=='video' else None
+        else:
+            model=fal_media.IMAGE if kind=='image' else fal_media.VIDEO
+            provider='fal'
+            duration=after['duration'] if kind=='video' else None
+            if kind=='video' and duration not in (5,10):return None
+        return generation_quote.estimate(kind,provider,model,duration)
+
+    for kind,label in (('image','整镜图片'),('video','整镜视频')):
+        if before.get(kind):
+            status='removed' if not after.get(kind) else 'review' if visual_changed or production.media_issue(after) else 'keep'
+            rows.append({'label':label,'status':status,'replacement':visual_quote(kind) if status!='keep' else None})
+    old_segments={seg['id']:index for index,seg in enumerate((before.get('preparation') or {}).get('segments',[]),1)}
+    for sid,source in before.get('segment_sources',{}).items():
+        index,segment=current_segments.get(sid,(old_segments.get(sid),None))
+        kind=takes.get(source['take_id'],{}).get('kind')
+        status='review' if source.get('basis')!=production.take_basis(after) or preparation.current_issue(p,after) else 'keep'
+        if not segment:status='removed'
+        label=f'片段 {index}' if index is not None else '原片段'
+        rows.append({'label':label+' · '+('视频' if kind=='video' else '图片'),
+                     'status':status,'replacement':visual_quote(segment['kind'],segment) if segment and status!='keep' else None})
+    selected_after={line_id:take['id'] for line_id,take in production.selected_audio(after)}
+    before_lines={line['id']:i for i,line in enumerate(before.get('lines') or [],1)}
+    after_lines={line['id'] for line in after.get('lines') or []}
+    for line_id,take in production.selected_audio(before):
+        kept=selected_after.get(line_id)==take['id']
+        try:
+            can_regenerate=not kept and (line_id is None or line_id in after_lines) and bool(production.audio_text(
+                after if line_id is None else {'lines':[line for line in after['lines'] if line['id']==line_id]}))
+        except ValueError:
+            can_regenerate=False
+        rows.append({'label':f'第 {before_lines[line_id]} 句音轨' if line_id is not None else '整镜音轨',
+                     'status':'keep' if kept else 'removed',
+                     'replacement':generation_quote.estimate('audio','openai',openai_direct.MODELS['audio'])
+                     if can_regenerate else None,
+                     'replacement_needed':bool(can_regenerate)})
+    return rows
+
+
 def revision_comparison(p, snapshot, result):
     target_id=snapshot.get('target_shot_id')
     if result.get('target_shot_id',target_id)!=target_id:raise ValueError('修改结果不属于目标镜头')
@@ -323,15 +389,16 @@ def revision_comparison(p, snapshot, result):
     production.apply_plan_text(after,incoming,production.PLAN_TEXT_FIELDS)
     after['asset_bindings']={a['id']:target['asset_bindings'].get(a['id'],a['selected_version']) for a in p['assets'] if a['id'] in after['asset_ids']}
     candidate=copy.deepcopy(p);candidate['shots']=[after if s['id']==target_id else s for s in candidate['shots']]
-    production.normalize(candidate);validate_project(candidate);production.validate(candidate,media_path);creative.validate(candidate)
+    production.normalize(candidate);production.update_audio_selection(candidate,after,target)
+    validate_project(candidate);production.validate(candidate,media_path);creative.validate(candidate)
     changes=[{'field':k,'before':target.get(k),'after':after.get(k)} for k in production.PLAN_TEXT_FIELDS if target.get(k)!=after.get(k)]
     effects=[]
     if preparation.current_issue(candidate,after):effects.append('制作准备需按新镜头重新确认')
-    if target.get('segment_sources'):effects.append('原片段素材保留，继续拼接前需重新确认选用')
-    if target.get('audio') and not after.get('audio'):effects.append('对白已改变，原整镜音轨保留为候选，不再自动选用')
+    if target.get('audio') and not after.get('audio'):effects.append('原整镜音轨保留为候选，已取消选用')
     if any(target.get(k) and not after.get(k) for k in ('image','video')):effects.append('原画面范围不适用于新时长，保留候选并取消整镜选用')
+    if production.content_basis(target)!=production.content_basis(after) and (after.get('image') or after.get('video')):effects.append('当前画面会保留，重新审核前需确认沿用或更换')
     if changes:effects.append('本镜需要重新审核；已有成片保留为历史版本')
-    return {'effects':effects,'target_shot_id':target_id,'number':1+[s['id'] for s in p['shots'] if s['episode_id']==target['episode_id']].index(target_id),
+    return {'effects':effects,'media_impact':revision_media_impact(candidate,target,after),'target_shot_id':target_id,'number':1+[s['id'] for s in p['shots'] if s['episode_id']==target['episode_id']].index(target_id),
             'changes':changes,'digest':production.digest({'target':target,'after':after,'source':snapshot.get('basis')}),
             'kept_takes':len(target.get('takes',[])),'instruction':snapshot.get('instruction','')}
 
@@ -448,7 +515,12 @@ def edit_production(body):
             elif action=='set_lines':
                 lines=body.get('lines')
                 if lines is None:s.pop('lines',None)  # back to plain text; the last derived dialogue text is kept
-                else:s['lines']=[{'id':l.get('id') or uid(),'speaker_asset_id':l.get('speaker_asset_id') or None,'text':l.get('text','')} for l in lines] if isinstance(lines,list) else lines
+                elif not isinstance(lines,list) or any(not isinstance(line,dict) for line in lines):
+                    raise ValueError('逐句对白格式无效')
+                else:
+                    incoming=[{'id':line.get('id') or uid(),'speaker_asset_id':line.get('speaker_asset_id') or None,
+                               'text':line.get('text','')} for line in lines]
+                    production.apply_plan_text(s,{'lines':incoming},('lines',))
             elif action=='set_clip':production.set_clip(s,body.get('source_take_id'),body.get('trim_start',0),body.get('trim_end'))
             elif action=='bind_current':
                 s['asset_bindings']={a['id']:a['selected_version'] for a in p['assets'] if a['id'] in s.get('asset_ids',[])}
@@ -464,6 +536,8 @@ def edit_production(body):
                 else:
                     t=next((t for t in s['takes'] if t['id']==body['take_id'] and t['kind']=='audio'),None)
                     if not t:raise ValueError('音轨候选不存在')
+                    issue=production.audio_take_issue(p,s,t,line['id'])
+                    if issue:raise ValueError(issue)
                     line.update(audio_take_id=t['id'],audio_duration=audio_duration(t['file']))
                     start=body.get('start')
                     if start is not None:
@@ -475,8 +549,11 @@ def edit_production(body):
                     # Partial assignments remain editable while the other lines are prepared.
                     if all(l.get('audio_take_id') for l in s['lines']):production.audio_schedule(s)
                     s.pop('audio',None);s['selected_takes'].pop('audio',None)
+            elif action=='confirm_media':
+                if not (s.get('image') or s.get('video')):raise ValueError('这一镜还没有选用画面')
+                s['media_basis']=production.content_basis(s)
             else:raise ValueError('未知制作操作')
-        return save(p,p['revision'],source_confirmation=action in ('bind_segment_source','bind_segment_sources'))
+        return save(p,p['revision'],source_confirmation=action in ('bind_segment_source','bind_segment_sources'),media_confirmation=body.get('shot_id') if action=='confirm_media' else None)
 
 def media_path(name):
     if not isinstance(name,str) or Path(name).name != name or not name: raise ValueError('非法媒体路径')
@@ -484,50 +561,112 @@ def media_path(name):
     if path.parent != MEDIA.resolve() or not path.is_file(): raise ValueError('素材不存在')
     return path
 
-def enqueue(pid,kind,payload,nonce):
+def discard_upload(name):
+    """Remove a just-uploaded file the user rejected; never touches media any project or version refers to."""
+    path=media_path(name)
+    with LOCK,connect() as c:
+        bodies=[r[0] for r in c.execute('SELECT body FROM projects')]+[r[0] for r in c.execute('SELECT body FROM versions')]
+        jobs=[r[0] or '' for r in c.execute('SELECT result FROM jobs')]
+    if any(json.dumps(name) in b for b in bodies) or any(name in j for j in jobs):raise ValueError('这个文件已被作品使用，不能删除')
+    path.unlink()
+    return {'discarded':name}
+
+def job_request(pid,kind,payload):
     if kind not in ('script','assets','shots','revision','image','video','audio','plan','qc','export','assemble'): raise ValueError('未知任务类型')
     p=project(pid)
-    if kind=='assemble':return enqueue_assembly(p,payload,nonce)
     episode_id=payload.get('episode_id') or (p['episodes'][0]['id'] if len(p['episodes'])==1 else None)
     if episode_id:creative.require_current_state(p,episode_id)
     snapshot=production_snapshot(p,payload.get('episode_id')) if kind=='export' else production.scope(p,payload.get('episode_id'),payload.get('shot_id'),payload.get('instruction',''))
     if kind in ('revision','image','video','audio') and not snapshot.get('target_shot_id'):raise ValueError('请指定目标镜头')
-    if kind=='audio':snapshot['speech']=production.speech_request(snapshot,payload.get('line_id'))
-    if kind=='audio' and (snapshot['speech']['line_id'] or snapshot['speech']['voice_id']!='alloy') and os.environ.get('DIFY_AUDIO_PROFILE')!='character-lines-v1':
-        raise ValueError('角色逐句配音工作流尚未发布接入；可以先导入逐句音轨')
+    uses_openai = kind=='audio' or (kind=='revision' and bool(openai_direct.key()))
+    if kind=='audio':
+        snapshot['speech']=production.speech_request(snapshot,payload.get('line_id'))
+        if not openai_direct.key():raise ValueError('请在设置中连接 OpenAI 配音服务，或先导入音轨')
+        openai_direct.check_voice(snapshot['speech']['voice_id'])
+        snapshot['speech']['model']=openai_direct.MODELS['audio']
     packet=None
+    expected_plan=payload.get('preparation_digest')
     if kind in ('image','video'):
         packet=preparation.freeze(p,snapshot['target_shot_id'],kind,payload.get('segment_id'),media_path,lambda k:bool(key_for(k)))
+        if expected_plan is not None and expected_plan!=packet['plan_digest']:
+            raise ValueError('制作准备已变更，请重新打开并确认后生成')
         refs=packet['references'];selected={(r['reference_id'],r['role']) for r in refs}
         plan={'items':refs,'mode':'first_frame' if packet['mode']=='image_to_video' else 'first_last_frame' if packet['mode']=='start_end_frames' else 'references',
               'omitted':[{**r,'reason':'未选入本片段'} for r in preparation.catalog(p,preparation.shot_of(p,snapshot['target_shot_id'])) if not any(x[0]==r['reference_id'] for x in selected)]}
         snapshot['generation_segment']=packet
-    if kind=='audio':plan=production.reference_plan(p,snapshot['target_shot_id'],kind)
+    if kind=='audio':plan={'items':[],'mode':'speech','omitted':[]}
     if kind in ('image','video','audio'):
         if len(plan['items'])>10:raise ValueError('单次生成最多使用 10 个参考素材，请减少本镜头绑定的视图或资产')
         snapshot.update(reference_media=plan['items'],reference_mode=plan['mode'],reference_omitted=plan['omitted'])
     if kind=='revision' and (not isinstance(payload.get('instruction'),str) or not 1<=len(payload['instruction'].strip())<=2000):raise ValueError('请填写不超过 2000 字的单镜修改要求')
     if kind=='export' and not production.readiness(p,snapshot['episode_id'])['can_export']:
         raise ValueError('导出前每个镜头都需有图片或视频、通过审核且无待复核修改')
+    uses_fal = bool(packet and packet['provider'] == 'fal')
     if kind!='export':
-        encode_context(snapshot)
-        if not key_for(kind):raise ValueError('尚未连接该 Dify 工作流；请先配置已发布应用的 API Key')
-        if spending()['remaining']==0:raise ValueError('付费调用已暂停，请先明确授权本批次数')
+        if not uses_fal:
+            encode_context(snapshot)
+            if not uses_openai and not key_for(kind):raise ValueError('尚未连接该 Dify 工作流；请先配置已发布应用的 API Key')
+    provider=(fal_media.identity(packet['model']) if uses_fal else openai_direct.identity(kind)
+              if uses_openai else provider_identity(kind)) if kind!='export' else None
+    return p,snapshot,packet,provider
+
+
+def build_job_quote(kind,snapshot,packet,provider):
+    name=provider['provider']
+    model=packet['model'] if packet else provider.get('model')
+    quote=generation_quote.estimate(kind,name,model,
+                                   packet['duration'] if packet and kind=='video' else None,
+                                   snapshot.get('instruction',''))
+    if packet:quote['model_label']=preparation.MODELS[model].get('label',model)
+    quote['reference_count']=len(snapshot.get('reference_media',[]))
+    quote['digest']=production.digest({'basis':snapshot.get('basis'),'speech':snapshot.get('speech'),
+                                       'instruction':snapshot.get('instruction'),'packet':packet,
+                                       'provider':provider,'quote':quote})
+    return quote
+
+
+def preview_job_quote(pid,kind,payload):
+    if kind in ('export','assemble'):raise ValueError('本地任务不需要生成报价')
+    _,snapshot,packet,provider=job_request(pid,kind,payload)
+    return build_job_quote(kind,snapshot,packet,provider)
+
+
+def enqueue(pid,kind,payload,nonce):
+    if kind=='assemble':return enqueue_assembly(project(pid),payload,nonce)
+    p,snapshot,packet,provider=job_request(pid,kind,payload)
+    expected_plan=payload.get('preparation_digest')
+    quote=build_job_quote(kind,snapshot,packet,provider) if provider else None
+    if 'quote_digest' in payload and (not quote or payload['quote_digest']!=quote['digest']):
+        raise ValueError('生成参数或报价已变化，请重新确认')
     dedupe=f'{pid}:{snapshot["episode_id"]}:{kind}:{nonce}'
     now=time.time()
     with connect() as c:
+        if packet and expected_plan is not None:
+            c.execute('BEGIN IMMEDIATE')
         existing=c.execute('SELECT id FROM jobs WHERE dedupe=?',(dedupe,)).fetchone()
         if existing:return existing['id']
+        if provider:
+            remaining=c.execute('SELECT remaining FROM spending WHERE id=1').fetchone()['remaining']
+            if not remaining:raise ValueError('付费调用已暂停，请先明确授权本批次数')
+            needed=quote['authorization_calls'] if 'quote_digest' in payload else 1
+            if remaining<needed:raise ValueError(f'本次需要 {needed} 次本机授权，目前剩余 {remaining} 次')
+        if packet and expected_plan is not None:
+            pending=c.execute("""SELECT id FROM jobs WHERE project_id=? AND kind=?
+                AND state IN ('queued','running','interrupted')
+                AND json_extract(payload,'$.snapshot.target_shot_id')=?
+                AND json_extract(payload,'$.generation_unit.segment.id')=? LIMIT 1""",
+                (pid,kind,packet['shot_id'],packet['id'])).fetchone()
+            if pending:raise ValueError('这一片段已有生成任务，请先查看生成记录')
         jid=uid()
         body={'snapshot':snapshot}
         if kind=='revision':body['revision_preview_required']=True
-        if kind!='export':body['provider']=provider_identity(kind)  # frozen now; compared again before any remote call
+        if provider:body.update(provider=provider,quote=quote)
         if kind in ('image','video','audio'):
             body['generation_unit']={'id':uid(),'shot_ids':[snapshot['target_shot_id']], 'kind':kind,
                 'line_id':snapshot.get('speech',{}).get('line_id'),'input_digest':production.digest(snapshot),
                 'parameters':copy.deepcopy(snapshot.get('speech') or {'mode':snapshot.get('reference_mode'),'duration':next(s['duration'] for s in snapshot['shots'] if s['id']==snapshot['target_shot_id'])}),
                 'provider':body['provider'],'references':[{'file':r['file'],'sha256':hashlib.sha256(media_path(r['file']).read_bytes()).hexdigest()} for r in snapshot.get('reference_media',[])],
-                'adapter_profile':os.environ.get('DIFY_AUDIO_PROFILE','alloy-v1') if kind=='audio' else 'external-workflow', 'created':now}
+                'adapter_profile':'openai-realtime' if kind=='audio' else 'external-workflow', 'created':now}
             if packet:body['generation_unit'].update(segment=packet,parameters={**packet['parameters'],**({'duration':packet['duration']} if kind=='video' else {})},
                                                      basis=production.take_basis(preparation.shot_of(p,snapshot['target_shot_id'])))
         c.execute('INSERT INTO jobs VALUES(?,?,?,?,?,?,?,?,?,?)',(jid,pid,kind,'queued',json.dumps(body),None,None,now,now,dedupe))
@@ -538,6 +677,15 @@ def check_provider(payload, kind=None):
     Jobs queued before identities were recorded have none and are accepted as before."""
     frozen=payload.get('provider')
     if not frozen:return
+    if frozen.get('provider') == 'openai':
+        if kind not in openai_direct.MODELS or not openai_direct.key() or frozen!=openai_direct.identity(kind):
+            raise ValueError('OpenAI 模型或 Key 已变更，请重新确认请求')
+        return
+    if frozen.get('provider') == 'fal':
+        model = payload.get('snapshot', {}).get('generation_segment', {}).get('model')
+        if model not in fal_media.PROFILES or frozen != fal_media.identity(model):
+            raise ValueError('fal 模型或 Key 已变更，请恢复原配置核实此任务')
+        return
     kind=kind or next((k for k in ('script','assets','shots','revision','image','video','audio','plan','qc') if key_env_for(k)==frozen['key_env']),None)
     if kind and not key_for(kind):return  # no key now: the adapter reports 'not configured' itself, nothing can be sent
     now=provider_identity(kind) if kind else None
@@ -572,19 +720,38 @@ def configure_dify(base,key,kind='shots'):
         raise ValueError('Dify 地址必须是 HTTPS 或本机服务')
     if not key.startswith('app-') or any(c.isspace() for c in key) or len(key)>512:
         raise ValueError('请使用已发布应用的 app- API Key，不使用账号会话凭据')
+    save_local_credentials({'DIFY_BASE_URL':base,('DIFY_PRODUCTION_KEY' if kind=='shots' else 'DIFY_'+kind.upper()+'_KEY'):key})
+    return {'configured':True,'verified':False,'base_url':base}
+
+def configure_fal(key):
+    if not isinstance(key,str):raise ValueError('请输入 fal API Key')
+    key=key.strip()
+    if not key or len(key)>512 or any(not c.isascii() or not c.isprintable() or c.isspace() or ord(c) in (34,39) for c in key):
+        raise ValueError('请粘贴有效的 fal API Key')
+    save_local_credentials({'FAL_KEY':key})
+    return {'configured':True,'verified':False}
+
+def configure_openai(key):
+    if not isinstance(key,str):raise ValueError('请输入 OpenAI API Key')
+    key=key.strip()
+    if not key.startswith('sk-') or len(key)>512 or any(not c.isascii() or not (c.isalnum() or c in '-_') for c in key):
+        raise ValueError('请使用 OpenAI 平台的 API Key')
+    save_local_credentials({'OPENAI_API_KEY':key})
+    return {'configured':True,'verified':False}
+
+def save_local_credentials(values):
     with LOCK:
-        path=ROOT/'.env';values={'DIFY_BASE_URL':base,('DIFY_PRODUCTION_KEY' if kind=='shots' else 'DIFY_'+kind.upper()+'_KEY'):key}
+        path=env_file()
         lines=path.read_text().splitlines() if path.exists() else []
         lines=[line for line in lines if line.split('=',1)[0].strip() not in values]
         text='\n'.join([*lines,*[k+'='+v for k,v in values.items()]])+'\n'
-        tmp=ROOT/('.env-'+uid()+'.tmp')
+        tmp=path.parent/('.env-'+uid()+'.tmp')
         try:
             fd=os.open(tmp,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
             with os.fdopen(fd,'w') as f:f.write(text)
             os.replace(tmp,path)
         finally:tmp.unlink(missing_ok=True)
         os.environ.update(values)
-    return {'configured':True,'verified':False,'base_url':base}
 
 def review_job(pid,jid,revision,review_id,action,notes):
     with LOCK, connect() as c:
@@ -619,22 +786,52 @@ def review_job(pid,jid,revision,review_id,action,notes):
         c.execute("UPDATE jobs SET state='queued',payload=?,result=?,error=NULL,updated=? WHERE id=? AND state='submitting'",
                   (json.dumps(payload,ensure_ascii=False),json.dumps(result,ensure_ascii=False),time.time(),jid))
 
+def recover_direct_audio(row,payload,result):
+    if row['kind']!='audio' or payload.get('provider',{}).get('provider')!='openai':return False
+    jid=row['id']
+    if len(jid)!=32 or any(ch not in '0123456789abcdef' for ch in jid):return False
+    path=MEDIA/(jid+'.wav')
+    if not path.is_file():return False
+    try:openai_direct.validate_wav(path)
+    except (ValueError,OSError):return False
+    result.update(state='succeeded',candidate_file=path.name,cost=None)
+    return True
+
 def reconcile_job(pid,jid):
     with LOCK, connect() as c:
         row=c.execute('SELECT * FROM jobs WHERE id=?',(jid,)).fetchone()
         if not row or row['project_id']!=pid or row['kind']=='export' or row['state'] not in ('interrupted','waiting_review','failed'): raise ValueError('此任务不能核实远程状态')
         result=json.loads(row['result'] or '{}')
-        if not result.get('run_id') and not (row['kind'] in ('image','video','audio') and result.get('result',{}).get('url')): raise ValueError('未取得远程运行编号，请到 Dify 日志核对，不自动重发')
         payload=json.loads(row['payload'])
-        if not (row['kind'] in ('image','video','audio') and result.get('result',{}).get('url')):check_provider(payload,row['kind'])
-        payload['operation']='receive' if row['kind'] in ('image','video','audio') and result.get('result',{}).get('url') else 'listen'
-        c.execute("UPDATE jobs SET state='queued',payload=?,error=NULL,updated=? WHERE id=?",(json.dumps(payload),time.time(),jid))
+        media_ready=row['kind'] in ('image','video','audio') and (result.get('result',{}).get('url') or result.get('candidate_file'))
+        if not media_ready:media_ready=recover_direct_audio(row,payload,result)
+        if not result.get('run_id') and not media_ready:raise ValueError('未取得可恢复的结果，请到生成服务日志核对，不自动重发')
+        if not media_ready:check_provider(payload,row['kind'])
+        payload['operation']='receive' if media_ready else 'listen'
+        c.execute("UPDATE jobs SET state='queued',payload=?,result=?,error=NULL,updated=? WHERE id=?",(json.dumps(payload),json.dumps(result),time.time(),jid))
 
 def ffmpeg(args):
     subprocess.run(['ffmpeg','-nostdin','-y','-loglevel','error',*args],check=True,capture_output=True,timeout=240)
 
 def probe_media(file):
     return json.loads(subprocess.check_output(['ffprobe','-v','error','-show_streams','-show_format','-of','json',str(media_path(file))],timeout=30))
+
+def thumbnail(name):
+    """A small cached JPEG for lists and backdrops. Media names are unique and never rewritten, so the cache never goes stale."""
+    src=media_path(name)
+    folder=MEDIA/'.thumbs';folder.mkdir(exist_ok=True)
+    out=folder/(name+'.jpg')
+    if out.is_file():return out
+    tmp=folder/('.'+uid()+'.jpg')
+    try:
+        for seek in (['-ss','0.3'],[]):
+            try:ffmpeg([*seek,'-i',str(src),'-frames:v','1','-vf','scale=360:-2','-q:v','5',str(tmp)])
+            except subprocess.CalledProcessError:continue
+            if tmp.is_file() and tmp.stat().st_size:break
+        else:raise ValueError('无法生成缩略图')
+        tmp.replace(out)
+    finally:tmp.unlink(missing_ok=True)
+    return out
 
 def enqueue_assembly(p,payload,nonce):
     with LOCK:
@@ -749,6 +946,9 @@ def work_once():
         c.execute("UPDATE jobs SET state='running',updated=? WHERE id=?",(time.time(),row['id']))
     try:
         payload=json.loads(row['payload'])
+        provider = payload.get('provider', {}).get('provider','dify')
+        uses_fal = provider == 'fal'
+        uses_openai = provider == 'openai'
         def checkpoint(result):
             with connect() as c:
                 if c.execute('SELECT state FROM jobs WHERE id=?',(row['id'],)).fetchone()['state']=='cancelled': raise ValueError('本地任务已取消，远程调用可能仍在执行')
@@ -762,16 +962,19 @@ def work_once():
             result=json.loads(row['result']);state='succeeded'
         elif payload.get('operation')=='listen':
             check_provider(payload,row['kind'])
-            result=Dify().listen(row['kind'],payload['snapshot'],json.loads(row['result'] or '{}'),checkpoint);state=result['state']
+            adapter = fal_media.Fal() if uses_fal else Dify()
+            result=adapter.listen(row['kind'],payload['snapshot'],json.loads(row['result'] or '{}'),checkpoint);state=result['state']
         else:
             check_provider(payload,row['kind'])  # before spend(): a refused job costs no call
-            if not key_for(row['kind']):raise ValueError('该 Dify 工作流已断开连接；未提交生成，未扣授权次数')
-            encode_context(payload['snapshot'])
+            if not uses_fal:
+                if not uses_openai and not key_for(row['kind']):raise ValueError('该 Dify 工作流已断开连接；未提交生成，未扣授权次数')
+                encode_context(payload['snapshot'])
             if len(payload['snapshot'].get('reference_media',[]))>10:raise ValueError('单次生成最多使用 10 个参考素材，未扣授权次数')
             if row['kind']=='audio':
                 profile=payload.get('generation_unit',{}).get('adapter_profile')
-                if profile and profile!=os.environ.get('DIFY_AUDIO_PROFILE','alloy-v1'):raise ValueError('配音工作流配置已变化，请重新确认请求')
+                if not uses_openai and profile and profile!=os.environ.get('DIFY_AUDIO_PROFILE','alloy-v1'):raise ValueError('配音工作流配置已变化，请重新确认请求')
                 speech=production.speech_request(payload['snapshot'],payload.get('generation_unit',{}).get('line_id'))
+                if uses_openai:speech['model']=openai_direct.MODELS['audio']
                 if payload['snapshot'].get('speech') and speech!=payload['snapshot']['speech']:raise ValueError('冻结的对白请求不一致，拒绝生成')
             for ref in payload.get('generation_unit',{}).get('references',[]):
                 if hashlib.sha256(media_path(ref['file']).read_bytes()).hexdigest()!=ref['sha256']:raise ValueError('参考文件内容已变化，请重新确认生成请求')
@@ -789,11 +992,32 @@ def work_once():
                     current_packet=preparation.freeze(current,frozen['shot_id'],row['kind'],frozen['id'],media_path,lambda k:bool(key_for(k)))
                     if current_packet!=frozen:raise ValueError('制作准备或模型能力已变化，请重新确认片段')
                 if not production.fresh(current,payload['snapshot']):raise ValueError('来源镜头或承接状态已变化，未提交生成，请重新准备')
-                spend()
-            adapter=Dify()
-            if row['kind'] in ('image','video','audio'):
-                result=adapter.run(row['kind'],payload['snapshot'],checkpoint,media_path=media_path)
-            else:result=adapter.run(row['kind'],payload['snapshot'],checkpoint)
+                if uses_fal:
+                    arguments = fal_media.arguments(row['kind'], payload['snapshot'], media_path)
+                if not uses_openai:spend()
+            if uses_openai:
+                credential=openai_direct.key()
+                def authorize():
+                    with LOCK,connect() as c:
+                        check_provider(payload,row['kind'])
+                        if openai_direct.identity(row['kind'],credential)!=payload['provider']:
+                            raise ValueError('OpenAI Key 已变更，未提交生成')
+                        if c.execute('SELECT state FROM jobs WHERE id=?',(row['id'],)).fetchone()['state']!='running':
+                            raise ValueError('任务已取消，未提交后续调用')
+                        if not production.fresh(project(row['project_id']),payload['snapshot']):
+                            raise ValueError('来源镜头已变化，未提交后续调用')
+                        spend()
+                if row['kind']=='audio':
+                    result=openai_direct.speech(payload['snapshot'],credential,authorize,MEDIA/(row['id']+'.wav'))
+                else:
+                    result=openai_direct.revise(payload['snapshot'],credential,authorize)
+                    if result['state']=='succeeded':
+                        revision_comparison(project(row['project_id']),payload['snapshot'],result['result'])
+            elif uses_fal:
+                result=fal_media.Fal().submit(row['kind'], payload['snapshot'], arguments, checkpoint)
+            elif row['kind'] in ('image','video','audio'):
+                result=Dify().run(row['kind'],payload['snapshot'],checkpoint,media_path=media_path)
+            else:result=Dify().run(row['kind'],payload['snapshot'],checkpoint)
             state=result['state']
         if state=='succeeded' and row['kind'] in ('image','video','audio'):
             update_job(row['id'],'running',result)
@@ -809,9 +1033,16 @@ def work_once():
                 if not s:raise ValueError('生成结果已保存，但来源镜头已删除')
                 # Finished paid output is retained even if the user has since locked the shot.
                 was_locked=s.get('locked');s['locked']=False
-                t=production.add_take(s,row['kind'],file,'Dify 生成候选','dify',basis=payload.get('generation_unit',{}).get('basis') or production.take_basis(next(x for x in payload['snapshot']['shots'] if x['id']==s['id'])),job_id=row['id'])
+                source=provider
+                label={'fal':'fal 生成候选','openai':'OpenAI 配音候选','dify':'Dify 生成候选'}[source]
+                t=production.add_take(s,row['kind'],file,label,source,basis=payload.get('generation_unit',{}).get('basis') or production.take_basis(next(x for x in payload['snapshot']['shots'] if x['id']==s['id'])),job_id=row['id'],shot_basis=production.content_basis(next(x for x in payload['snapshot']['shots'] if x['id']==s['id'])))
                 if t and payload.get('generation_unit',{}).get('segment'):t['generation_segment']={k:payload['generation_unit']['segment'][k] for k in ('id','start','end','shot_id')}
-                if t and payload['snapshot'].get('speech',{}).get('line_id'):t['line_id']=payload['snapshot']['speech']['line_id']
+                if t and row['kind']=='audio':
+                    snapshot=payload['snapshot']
+                    line_id=snapshot.get('speech',{}).get('line_id')
+                    source_shot=next(x for x in snapshot['shots'] if x['id']==s['id'])
+                    t['speech_basis']=production.speech_basis(snapshot,source_shot,line_id)
+                    if line_id:t['line_id']=line_id
                 s['locked']=was_locked
                 save(p,p['revision'],candidate_only=True);result['candidate_file']=file
         update_job(row['id'],state,result)
@@ -842,11 +1073,12 @@ class Handler(BaseHTTPRequestHandler):
                     ps=[production.normalize(normalize_project(json.loads(r['body']))) for r in c.execute('SELECT body FROM projects')]
                     js=[public_job(r) for r in c.execute('SELECT * FROM jobs ORDER BY created DESC LIMIT 100')]
                 readiness={p['id']:{e['id']:production.readiness(p,e['id']) for e in p['episodes']} for p in ps}
-                return self.respond({'projects':ps,'jobs':js,'readiness':readiness,'spending':spending(),'providers':PROVIDERS,'dify_base_url':os.environ.get('DIFY_BASE_URL','https://api.dify.ai/v1'),'dify':{k:bool(key_for(k)) for k in ('script','assets','shots','revision','image','video','audio','plan','qc')}})
+                return self.respond({'projects':ps,'jobs':js,'readiness':readiness,'spending':spending(),'providers':PROVIDERS,'dify_base_url':os.environ.get('DIFY_BASE_URL','https://api.dify.ai/v1'),'openai_direct':bool(openai_direct.key()),'dify':{k:bool(key_for(k)) for k in ('script','assets','shots','revision','image','video','audio','plan','qc')}})
             if path.startswith('/api/versions/'):
                 with connect() as c: rows=c.execute('SELECT id,body,created FROM versions WHERE project_id=? ORDER BY created DESC LIMIT 30',(path.split('/')[-1],)).fetchall()
                 return self.respond([{'id':r['id'],'project':normalize_project(json.loads(r['body'])),'created':r['created']} for r in rows])
-            if path.startswith('/media/'):file=media_path(unquote(path[7:]))
+            if path.startswith('/thumb/'):file=thumbnail(unquote(path[7:]))
+            elif path.startswith('/media/'):file=media_path(unquote(path[7:]))
             else:
                 file=(ROOT/'web'/('index.html' if path=='/' else unquote(path.lstrip('/')))).resolve()
                 if not file.is_relative_to(ROOT/'web') or not file.is_file():return self.respond({'error':'不存在'},404)
@@ -875,7 +1107,7 @@ class Handler(BaseHTTPRequestHandler):
             if origin and origin!=f'http://{self.headers.get("Host")}':return self.respond({'error':'来源无效'},403)
             path=urlparse(self.path).path; length=int(self.headers.get('Content-Length','0'))
             if length>200*1024*1024:raise ValueError('单次上传限 200 MB')
-            if path.startswith('/api/upload/'):
+            if path.startswith('/api/upload/') and path!='/api/upload/discard':
                 ext=path.rsplit('/',1)[1]
                 if ext not in ('mp4','mov','wav','mp3','m4a','png','jpg','jpeg','webp'):raise ValueError('不支持该媒体格式')
                 name=uid()+'.'+ext; dest=MEDIA/name; dest.write_bytes(self.rfile.read(length))
@@ -887,6 +1119,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.respond({'file':name,'streams':[s['codec_type'] for s in info['streams']]})
             if length>2*1024*1024:raise ValueError('请求过大')
             body=json.loads(self.rfile.read(length) or '{}')
+            if path=='/api/upload/discard':return self.respond(discard_upload(body.get('file')))
             if path=='/api/preparation/initialize':return self.respond(initialize_preparation(body['project_id'],body['revision'],body.get('episode_id')))
             if path=='/api/preparation/open':return self.respond(open_preparation(body['project_id'],body['shot_id'],body.get('kind','video')))
             if path=='/api/preparation/save':return self.respond(save_preparation(body['project_id'],body['shot_id'],body['revision'],body['plan'],body['basis']))
@@ -902,6 +1135,7 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/api/save':return self.respond(save(body['project'],body['revision']))
             if path=='/api/production':return self.respond(edit_production(body))
             if path=='/api/settings/spending':return self.respond(set_spending(body.get('remaining')))
+            if path=='/api/jobs/quote':return self.respond(preview_job_quote(body['project_id'],body['kind'],body))
             if path=='/api/jobs':return self.respond({'id':enqueue(body['project_id'],body['kind'],body,body['nonce'])})
             if path=='/api/review':
                 review_job(body['project_id'],body['job_id'],body['revision'],body['review_id'],body['action'],body.get('notes',''))
@@ -910,6 +1144,8 @@ class Handler(BaseHTTPRequestHandler):
                 reconcile_job(body['project_id'],body['job_id']);return self.respond({'ok':True})
             if path=='/api/settings/dify':return self.respond(configure_dify(body.get('base_url',''),body.get('api_key',''),body.get('kind','shots')))
             if path=='/api/settings/dify/check':return self.respond(Dify().inspect_connection(body.get('kind')))
+            if path=='/api/settings/openai':return self.respond(configure_openai(body.get('api_key')))
+            if path=='/api/settings/fal':return self.respond(configure_fal(body.get('api_key')))
             if path=='/api/cancel':
                 with connect() as c:c.execute("UPDATE jobs SET state='cancelled',updated=? WHERE id=? AND state IN ('queued','running','waiting_review')",(time.time(),body['id']))
                 return self.respond({'ok':True})
@@ -917,7 +1153,7 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:self.respond({'error':str(e)},400)
 
 def load_env():
-    p=ROOT/'.env'
+    p=env_file()
     if p.exists():
         for line in p.read_text().splitlines():
             if '=' in line and not line.startswith('#'):

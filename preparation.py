@@ -5,10 +5,10 @@ import hashlib
 import uuid
 import creative
 import continuity
+import fal_media
 
-# Deliberately empty until an actual provider/model/route contract is verified.
-# Tests inject clearly isolated fixtures; saving a model name does not verify it.
-MODELS = {}
+# Only provider models with a documented input/output contract belong here.
+MODELS = fal_media.PROFILES.copy()
 MODES = {'image': ('text_to_image','reference_to_image'),
          'video': ('text_to_video','reference_to_video','image_to_video','start_end_frames')}
 ROLES = ('reference_image','first_frame','last_frame')
@@ -37,9 +37,20 @@ def catalog(p,s):
         v=next(v for v in a['versions'] if v['id']==vid)
         for view,file in {**({'primary':v['file']} if v.get('file') else {}),**v.get('views',{})}.items():
             items.append({'source':'asset','asset_id':aid,'version_id':vid,'view':view,'file':file,'label':a['name']+' · '+{'primary':'设定图','front':'正面','side':'侧面','back':'背面','three_quarter':'四分之三侧面'}.get(view,view)})
-    for source,target in [('shot_image',s),('continuity',next((x for x in p['shots'] if x['id']==s.get('continuity_from')),None))]:
-        if target and target.get('image'):
-            items.append({'source':source,'shot_id':target['id'],'file':target['image'],'label':'本镜已选图' if source=='shot_image' else '承接镜头已选图'})
+    # A video can replace the selected image without invalidating its pinned first frame.
+    from production import content_basis
+    frames = {}
+    if s.get('image'):
+        frames[s['image']] = '本镜已选图'
+    current = content_basis(s)
+    for take in s.get('takes', []):
+        if take['kind'] == 'image' and take.get('shot_basis') == current:
+            frames.setdefault(take['file'], take['label'])
+    for file, label in frames.items():
+        items.append({'source':'shot_image','shot_id':s['id'],'file':file,'label':label})
+    previous = next((x for x in p['shots'] if x['id'] == s.get('continuity_from')), None)
+    if previous and previous.get('image'):
+        items.append({'source':'continuity','shot_id':previous['id'],'file':previous['image'],'label':'承接镜头已选图'})
     for item in items:item['reference_id']=creative.digest({k:v for k,v in item.items() if k!='label'})[:24]
     return items
 
@@ -148,6 +159,9 @@ def report(p,sid,media_path,connected=None,profiles=None):
             params=seg['parameters']
             if seg['kind']!=profile.get('kind') or mode not in profile.get('modes',[]):error('模型不支持所选生成方式',sid2)
             if not profile.get('provider') or not profile.get('evidence'):error('模型能力缺少核实来源',sid2)
+            if profile.get('provider') == 'fal' and any(r['source'] == 'shot_image' and r['file'] == s.get('image') for r in refs):
+                from production import media_issue
+                if media_issue(s):error('本镜首帧来自修改前，请生成新图或确认沿用',sid2)
             limits=profile.get('duration',{})
             if seg['kind']=='video' and (not limits or not limits.get('min',0)<=duration<=limits.get('max',0)):error('片段时长超出模型范围',sid2)
             step=limits.get('step')
@@ -159,7 +173,9 @@ def report(p,sid,media_path,connected=None,profiles=None):
             if len(refs)>profile.get('max_images',0):error('参考图数量超过模型上限',sid2)
             if any(counts[role]>profile.get('role_limits',{}).get(role,0) for role in ROLES):error('参考图用途或数量超出模型能力',sid2)
             if profile.get('parameter_sets') and not any(all(params.get(k)==v for k,v in combo.items()) for combo in profile['parameter_sets']):error('分辨率、画幅与帧率组合不受支持',sid2)
-        if connected is not None and not connected(seg['kind']):error('对应生成服务尚未连接',sid2)
+        if connected is not None:
+            service_ready = bool(fal_media.key()) if profile and profile.get('provider') == 'fal' else connected(seg['kind'])
+            if not service_ready:error('对应生成服务尚未连接',sid2)
         rows.append({'id':sid2,'start':seg['start'],'end':seg['end'],'duration':duration,'kind':seg['kind'],'model':seg['model'],'mode':mode,'parameters':copy.deepcopy(seg['parameters']),'references':refs})
     return {'ready':not errors,'issues':errors,'segments':rows,'plan_digest':creative.digest(plan),'operation_count':len(rows)}
 

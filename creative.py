@@ -150,6 +150,14 @@ def merge_spec(target, patch):
     return {**copy.deepcopy(old), **copy.deepcopy(patch)}
 
 
+RISK_LABELS = {'fine-handwork':'手部精细动作','crowd':'多人群像','fast-motion':'快速运动','text-on-screen':'画面中的文字',
+    'water':'水与液体','fire':'火焰与烟雾','animal':'动物','vehicle':'交通工具','night':'夜景低光','reflection':'镜面与反射'}
+
+
+def risk_text(flag):
+    return '源剧本标记的制作风险：' + RISK_LABELS.get(flag, flag)
+
+
 def issues(project):
     """Structural errors block; imported production risks remain advisory."""
     out = []
@@ -199,7 +207,7 @@ def issues(project):
         if not isinstance(flags, list) or not all(isinstance(x, str) for x in flags):
             add('制作风险必须是文字数组')
         else:
-            for flag in flags: add(flag, 'warning', 'source-production-risk')
+            for flag in flags: add(risk_text(flag), 'warning', 'source-production-risk')
         for aid, vid in shot.get('asset_bindings', {}).items():
             asset = assets.get(aid)
             if asset and asset['kind'] == 'character':

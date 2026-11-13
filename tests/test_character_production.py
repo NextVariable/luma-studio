@@ -70,7 +70,7 @@ class CharacterProductionTests(unittest.TestCase):
         self.add_shot();self.p['shots'][0]['lines']=[{'id':'a','text':'你好','speaker_asset_id':'hero'},
             {'id':'b','text':'旁白','speaker_asset_id':None}]
         self.p=studio.save(self.p,self.p['revision'])
-        with patch.dict(os.environ,{'DIFY_AUDIO_KEY':'test','DIFY_AUDIO_PROFILE':'character-lines-v1'}):
+        with patch.dict(os.environ,{'OPENAI_API_KEY':'sk-offline'}):
             jid=studio.enqueue(self.p['id'],'audio',{'shot_id':'s1','line_id':'a'},'line')
         with studio.connect() as c:payload=json.loads(c.execute('select payload from jobs where id=?',(jid,)).fetchone()[0])
         self.assertEqual(payload['snapshot']['speech']['line_id'],'a')
@@ -120,6 +120,26 @@ class CharacterProductionTests(unittest.TestCase):
         self.p=studio.save(self.p,self.p['revision'])
         self.assertNotIn('audio_take_id',self.p['shots'][0]['lines'][0])
         self.assertEqual(len(self.p['shots'][0]['takes']),1)
+
+    def test_saving_lines_allocates_ids_and_preserves_unedited_audio(self):
+        self.add_shot()
+        pid=self.p['id']
+        def edit(**fields):
+            self.p=studio.edit_production({'project_id':pid,'revision':self.p['revision'],
+                                           'shot_id':'s1',**fields})
+        edit(action='set_lines',lines=[{'text':'第一句。'},{'text':'第二句。'}])
+        first,second=self.p['shots'][0]['lines']
+        self.assertNotEqual(first['id'],second['id'])
+        studio.ffmpeg(['-f','lavfi','-i','sine=frequency=440','-t','0.25',str(studio.MEDIA/'retained.wav')])
+        edit(action='add_take',kind='audio',file='retained.wav',line_id=first['id'])
+        take=self.p['shots'][0]['takes'][-1]
+        edit(action='bind_line_audio',line_id=first['id'],take_id=take['id'])
+        edit(action='set_lines',lines=[first,{**second,'text':'只改第二句。'}])
+        self.assertEqual(self.p['shots'][0]['lines'][0]['audio_take_id'],take['id'])
+        self.assertEqual(self.p['shots'][0]['lines'][1]['text'],'只改第二句。')
+        edit(action='set_lines',lines=[{**first,'text':'现在改第一句。'},second])
+        self.assertNotIn('audio_take_id',self.p['shots'][0]['lines'][0])
+        self.assertIn(take,self.p['shots'][0]['takes'])
 
     def test_cloud_audio_intake_uses_only_requested_line_and_bound_voice(self):
         from test_audio_workflow import audio
