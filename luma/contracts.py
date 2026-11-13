@@ -31,7 +31,7 @@ def validate(kind, data):
                 raise ValueError('资产 kind 或 name 无效')
     if kind == 'shots':
         for s in data['shots']:
-            if 'creative_spec' in s and not isinstance(s['creative_spec'],dict):
+            if s.get('creative_spec') is not None and not isinstance(s['creative_spec'],dict):
                 raise ValueError('镜头创作规格必须是对象')
             if not isinstance(s.get('description'),str) or not s['description'].strip():
                 raise ValueError('镜头缺少 description')

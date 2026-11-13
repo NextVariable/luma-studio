@@ -543,7 +543,7 @@ def apply_plan_text(target, incoming, fields):
                 line.pop(key,None)
                 if key in prior and all(line.get(k)==prior.get(k) for k in ('text','speaker_asset_id')):
                     line[key]=prior[key]
-    if 'creative_spec' in incoming and 'creative_spec' in fields:target['creative_spec']=creative.merge_spec(before,incoming['creative_spec'])
+    if incoming.get('creative_spec') is not None and 'creative_spec' in fields:target['creative_spec']=creative.merge_spec(before,incoming['creative_spec'])
     creative.synchronize(target,before)
     clear_stale_audio(target,before)
     if target.get('duration')!=before.get('duration'):

@@ -33,3 +33,11 @@ class RevisionWorkflowTests(unittest.TestCase):
         for shots,review in (([shot,shot],True),([shot],'yes')):
             result=self.run_code('check',text=json.dumps({'shots':shots}),review=json.dumps({'passed':review}),project={'assets':[],'revision':2,'target_shot_id':'s1'})
             self.assertEqual(result['ok'],0)
+
+    def test_null_creative_spec_from_a_plain_project_is_accepted(self):
+        # The published schema asks for creative_spec on every shot and uses null for plain projects.
+        from luma.contracts import validate
+        shot={'description':'近景','duration':5,'asset_ids':[],'creative_spec':None}
+        self.assertEqual(validate('revision',{'shots':[shot]})['shots'][0]['creative_spec'],None)
+        with self.assertRaises(ValueError):
+            validate('revision',{'shots':[{**shot,'creative_spec':'text'}]})

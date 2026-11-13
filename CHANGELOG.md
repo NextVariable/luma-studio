@@ -23,3 +23,5 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). I
 - Concurrent thumbnail requests no longer start parallel FFmpeg runs for the same file.
 - Discarding an upload matches whole file names, so `a.mp4` is no longer blocked by a job that mentions `final-a.mp4`.
 - Import previews list shot and asset names instead of raw JSON.
+- A single-shot revision from a plain project may return `creative_spec: null`; previewing and applying it no longer fails.
+- `workflows/production/shot-revision.yml` is regenerated so its output schema matches the generator. Re-import it into Dify and republish the app to use it.

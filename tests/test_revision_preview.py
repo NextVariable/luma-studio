@@ -29,6 +29,16 @@ class RevisionPreviewTests(unittest.TestCase):
         self.assertTrue(p['shots'][0]['needs_review']);self.assertFalse(p['shots'][0]['approved'])
         self.assertEqual(p['shots'][0]['asset_bindings'],before['shots'][0]['asset_bindings'])
 
+    def test_plain_project_proposal_with_null_creative_spec_previews_and_applies(self):
+        # The published workflow returns creative_spec: null for plain (non-screenplay) projects.
+        incoming={'description':'旅人面部近景','duration':2,'framing':'近景','asset_ids':['hero'],'creative_spec':None}
+        jid=self.revision_job(incoming)
+        preview=studio.revision_preview(self.p['id'],jid,self.p['revision'])
+        self.assertNotIn('creative_spec',[x['field'] for x in preview['changes']])
+        applied=studio.apply_job(self.p['id'],jid,self.p['revision'],preview_digest=preview['digest'])
+        self.assertEqual(applied['shots'][0]['description'],'旅人面部近景')
+        self.assertFalse(applied['shots'][0].get('creative_spec'))
+
     def test_new_revision_cannot_be_applied_without_matching_preview(self):
         jid=self.revision_job()
         for token in (None,'wrong'):
