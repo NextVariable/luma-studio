@@ -1,8 +1,7 @@
 """Verified capabilities ONLY for isolated protocol tests, never application configuration."""
-import copy
 from unittest.mock import patch
-import studio
-import preparation
+from luma import studio
+from luma import preparation
 
 def prepare(case,kind,mode=None):
     profile={'verified':True,'contract':'luma-prepared-media-v1','provider':'isolated-fixture','evidence':'unit-test-only',

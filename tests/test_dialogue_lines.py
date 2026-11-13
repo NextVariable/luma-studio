@@ -1,5 +1,6 @@
 import json, subprocess, unittest
-import studio, production, test_studio
+from luma import studio, production
+import test_studio
 
 
 class DialogueLineTests(unittest.TestCase):
@@ -139,7 +140,7 @@ class DialogueLineTests(unittest.TestCase):
 
     def test_manifest_records_the_lines(self):
         self.with_lines(duration=4)
-        path = self.export()
+        self.export()
         with studio.connect() as c:
             row = c.execute("select result from jobs where kind='export'").fetchone()
         proof = json.loads(studio.media_path(json.loads(row[0])['manifest']).read_text())

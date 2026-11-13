@@ -5,7 +5,7 @@ import json, sys, textwrap
 from pathlib import Path
 ROOT=Path(__file__).parent
 sys.path.insert(0,str(ROOT.parent))
-from creative import PROJECTIONS, SCHEMA_VERSION
+from luma.creative import PROJECTIONS, SCHEMA_VERSION
 
 def obj(properties):
  return {'type':'object','properties':properties,'required':list(properties),'additionalProperties':False}

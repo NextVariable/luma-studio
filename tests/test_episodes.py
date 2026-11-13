@@ -1,6 +1,6 @@
 import copy, json, os, unittest
 from unittest.mock import patch
-import studio
+from luma import studio
 import test_studio
 
 

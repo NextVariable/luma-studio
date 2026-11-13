@@ -1,7 +1,8 @@
 """被拒绝的上传文件可以清理，但绝不删除作品正在引用的素材。"""
+import json
 import unittest
 
-import studio
+from luma import studio
 import test_studio
 
 
@@ -28,6 +29,18 @@ class DiscardUploadTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             studio.discard_upload('../studio.sqlite')
         self.assertTrue(studio.DB.exists())
+
+    def test_filename_substring_does_not_block_unrelated_discard(self):
+        # A job result that mentions "final-a.mp4" must not block discarding the
+        # unrelated "a.mp4" (a raw substring match used to do exactly that).
+        with studio.connect() as c:
+            c.execute('INSERT INTO jobs VALUES(?,?,?,?,?,?,?,?,?,?)',
+                      ('j1', self.p['id'], 'video', 'succeeded', '{}',
+                       json.dumps({'candidate_file': 'final-a.mp4'}),
+                       None, 0, 0, 'once'))
+        (studio.MEDIA / 'a.mp4').write_bytes(b'x')
+        self.assertEqual(studio.discard_upload('a.mp4'), {'discarded': 'a.mp4'})
+        self.assertFalse((studio.MEDIA / 'a.mp4').exists())
 
 
 if __name__ == '__main__':

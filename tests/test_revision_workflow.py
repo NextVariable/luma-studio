@@ -1,6 +1,6 @@
 import io,json,unittest
 from pathlib import Path
-from providers import Dify
+from luma.providers import Dify
 
 class RevisionWorkflowTests(unittest.TestCase):
     def setUp(self):

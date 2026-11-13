@@ -1,6 +1,6 @@
 """Independent single-shot Dify workflow. Generate locally; never publish or run."""
-import copy, json
-from build_production import Graph, g as production_graph
+import json
+from build_production import Graph
 
 g=Graph()
 g.node('start','start','单镜修订快照',0,200,{'variables':[{'variable':'context','label':'镜头上下文 JSON','type':'paragraph','required':True,'max_length':100000}]})

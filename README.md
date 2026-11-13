@@ -4,7 +4,7 @@
 
 A local-first production workspace for episodic motion comics. Keep character looks, shots, and dialogue together, revise one shot at a time, and export the episode as an MP4.
 
-[简体中文](README.zh-CN.md) · [Architecture](docs/architecture.md) · [Provider setup](docs/providers.md) · [Contributing](CONTRIBUTING.md)
+[简体中文](README.zh-CN.md) · [Architecture](docs/architecture.md) · [Provider setup](docs/providers.md) · [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md)
 
 **Developer preview.** The local production and delivery workflow works with imported media and requires no model account. Cloud generation adapters are available with your own credentials. A full cloud-generated episode has yet to pass end-to-end acceptance.
 
@@ -15,8 +15,8 @@ Requirements are **macOS or Linux**, **Python 3.11+**, and **FFmpeg** with `ffpr
 ```sh
 git clone https://github.com/NextVariable/luma-studio.git
 cd luma-studio
-python3 studio.py check
-python3 studio.py
+python3 -m luma check
+python3 -m luma
 ```
 
 Open [Luma Studio on localhost](http://127.0.0.1:7820/). The workspace currently uses a Chinese interface.
@@ -49,11 +49,19 @@ See [provider setup](docs/providers.md) for credentials and workflow templates. 
 
 ## Data and development
 
-Luma serves one local library on loopback. See [architecture and data](docs/architecture.md) for repository layout, backup, and restore.
+Luma serves one local library on loopback. See [architecture and data](docs/architecture.md) for backup and restore.
+
+| Path | Contents |
+| --- | --- |
+| [`luma/`](luma/) | Python package: HTTP server, SQLite, job worker, provider adapters, FFmpeg export |
+| [`web/`](web/) | Browser workspace in vanilla JavaScript, CSS and bundled assets |
+| [`workflows/`](workflows/) | Dify workflow definitions and the generators that build them |
+| [`tests/`](tests/) | Python and JavaScript regression suites |
+| [`docs/`](docs/) | Architecture and provider setup |
 
 ```sh
 python3 -m unittest discover -s tests -v
 node --test tests/*.test.js
 ```
 
-The JavaScript tests use Node.js 22+. See the [MIT license](LICENSE), [third-party notices](THIRD_PARTY_NOTICES.md), and [security reporting](SECURITY.md).
+The JavaScript tests use Node.js 22+. See the [MIT license](LICENSE), [third-party notices](THIRD_PARTY_NOTICES.md), [security reporting](SECURITY.md) and [code of conduct](CODE_OF_CONDUCT.md).

@@ -1,8 +1,8 @@
 import unittest,tempfile,copy,json,os,subprocess
 from pathlib import Path
 from unittest.mock import patch
-import studio
-from contracts import validate
+from luma import studio
+from luma.contracts import validate
 
 class StudioTests(unittest.TestCase):
  def setUp(self):

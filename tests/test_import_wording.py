@@ -1,7 +1,7 @@
 """导入预览面向创作者：风险标记是可读中文，缺参考的素材显示名称。"""
 import unittest
 
-import studio
+from luma import studio
 import test_drama_import
 import test_studio
 
@@ -18,7 +18,7 @@ class ImportPreviewWordingTests(unittest.TestCase):
         self.assertIn('手部精细动作', risks[0])
 
     def test_unknown_flag_is_kept_verbatim(self):
-        import creative
+        from luma import creative
         self.assertEqual(creative.risk_text('rare-thing'), '源剧本标记的制作风险：rare-thing')
 
     def test_missing_references_come_with_names(self):

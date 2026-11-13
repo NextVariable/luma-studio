@@ -4,8 +4,8 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-import production
-import studio
+from luma import production
+from luma import studio
 import test_studio
 
 
@@ -41,7 +41,7 @@ class DeliveryChecklistTests(unittest.TestCase):
             self.assertEqual(job['state'],'succeeded',job['error'])
             return json.loads(job['result'])['file']
 
-        with patch('studio.spend',side_effect=AssertionError('external call')):
+        with patch('luma.studio.spend',side_effect=AssertionError('external call')):
             initial=checklist()
             self.assertFalse(initial['ready'])
             self.assertIn({'status':'blocked','label':'尚未选用画面','action':'media'},initial['checks'])

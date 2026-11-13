@@ -1,11 +1,10 @@
 """Offline production preparation. Model capabilities are server-owned, never LLM claims."""
 import copy
 import math
-import hashlib
 import uuid
-import creative
-import continuity
-import fal_media
+from . import creative
+from . import continuity
+from . import fal_media
 
 # Only provider models with a documented input/output contract belong here.
 MODELS = fal_media.PROFILES.copy()
@@ -21,7 +20,7 @@ def shot_of(p, sid):
 
 
 def basis(s):
-    from production import semantic_shot
+    from .production import semantic_shot
     return creative.digest(semantic_shot(s))
 
 
@@ -38,7 +37,7 @@ def catalog(p,s):
         for view,file in {**({'primary':v['file']} if v.get('file') else {}),**v.get('views',{})}.items():
             items.append({'source':'asset','asset_id':aid,'version_id':vid,'view':view,'file':file,'label':a['name']+' · '+{'primary':'设定图','front':'正面','side':'侧面','back':'背面','three_quarter':'四分之三侧面'}.get(view,view)})
     # A video can replace the selected image without invalidating its pinned first frame.
-    from production import content_basis
+    from .production import content_basis
     frames = {}
     if s.get('image'):
         frames[s['image']] = '本镜已选图'
@@ -160,7 +159,7 @@ def report(p,sid,media_path,connected=None,profiles=None):
             if seg['kind']!=profile.get('kind') or mode not in profile.get('modes',[]):error('模型不支持所选生成方式',sid2)
             if not profile.get('provider') or not profile.get('evidence'):error('模型能力缺少核实来源',sid2)
             if profile.get('provider') == 'fal' and any(r['source'] == 'shot_image' and r['file'] == s.get('image') for r in refs):
-                from production import media_issue
+                from .production import media_issue
                 if media_issue(s):error('本镜首帧来自修改前，请生成新图或确认沿用',sid2)
             limits=profile.get('duration',{})
             if seg['kind']=='video' and (not limits or not limits.get('min',0)<=duration<=limits.get('max',0)):error('片段时长超出模型范围',sid2)

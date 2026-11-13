@@ -1,6 +1,7 @@
 import copy, io, json, os, unittest
 from unittest.mock import patch
-import studio, production, test_studio
+from luma import studio, production
+import test_studio
 
 
 class ReferenceModeTests(unittest.TestCase):
@@ -57,7 +58,7 @@ class ReferenceModeTests(unittest.TestCase):
         self.assertEqual(item['version_id'], self.p['shots'][0]['asset_bindings']['hero'])
 
     def test_strict_own_image_becomes_first_frame_and_lists_dropped_references(self):
-        ref = self.setup_pair()
+        self.setup_pair()
         self.set_mode('s1', 'start_own')
         plan = production.reference_plan(self.p, 's1', 'video')
         self.assertEqual(plan['mode'], 'first_frame')
@@ -156,7 +157,7 @@ class ReferenceModeTests(unittest.TestCase):
                 studio.enqueue(self.p['id'], 'video', {'episode_id': self.p['episodes'][0]['id'], 'shot_id': 's1'}, 'n')
 
     def test_dify_context_carries_mode_roles_and_omissions(self):
-        from providers import Dify
+        from luma.providers import Dify
         self.setup_pair()
         self.set_mode('s1', 'start_own')
         plan = production.reference_plan(self.p, 's1', 'video')

@@ -1,6 +1,7 @@
 import copy, itertools, os, unittest
 from unittest.mock import patch
-import studio, test_studio
+from luma import studio
+import test_studio
 
 NONCE = itertools.count()
 

@@ -3,20 +3,20 @@ import argparse, copy, json, os, shutil, sqlite3, sys, tempfile, uuid, time, thr
 from pathlib import Path
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, unquote
-from providers import Dify, PROVIDERS, encode_context, key_for, key_env_for, provider_identity, UncertainRun
-from contracts import validate
-from episodes import normalize_project, validate_episodes, changed_episodes, production_snapshot
-import production
-import creative
-import preparation
-import fal_media
-import assembly
-import continuity
-import local_storage
-import openai_direct
-import generation_quote
+from .providers import Dify, PROVIDERS, encode_context, key_for, key_env_for, provider_identity, UncertainRun
+from .contracts import validate
+from .episodes import normalize_project, validate_episodes, changed_episodes, production_snapshot
+from . import production
+from . import creative
+from . import preparation
+from . import fal_media
+from . import assembly
+from . import continuity
+from . import local_storage
+from . import openai_direct
+from . import generation_quote
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent.parent
 DATA = Path(os.environ.get('AUTEUR_DATA', ROOT/'data'))
 MEDIA = DATA/'media'
 DB = DATA/'studio.sqlite'
@@ -282,7 +282,7 @@ def confirm_continuity(pid,episode_id,expected,preview_digest,resolution,reason)
         return save(p,expected,state_confirmation=episode_id)
 
 def preview_drama_import(bundle):
-    from drama_import import convert
+    from .drama_import import convert
     preview=convert(bundle)
     validate_project(preview['project']);production.validate(preview['project'],media_path)
     token=uid();digest=production.digest(preview)
@@ -567,7 +567,7 @@ def discard_upload(name):
     with LOCK,connect() as c:
         bodies=[r[0] for r in c.execute('SELECT body FROM projects')]+[r[0] for r in c.execute('SELECT body FROM versions')]
         jobs=[r[0] or '' for r in c.execute('SELECT result FROM jobs')]
-    if any(json.dumps(name) in b for b in bodies) or any(name in j for j in jobs):raise ValueError('这个文件已被作品使用，不能删除')
+    if any(json.dumps(name) in b for b in bodies) or any(json.dumps(name) in j for j in jobs):raise ValueError('这个文件已被作品使用，不能删除')
     path.unlink()
     return {'discarded':name}
 
@@ -816,21 +816,25 @@ def ffmpeg(args):
 def probe_media(file):
     return json.loads(subprocess.check_output(['ffprobe','-v','error','-show_streams','-show_format','-of','json',str(media_path(file))],timeout=30))
 
+_thumb_lock = threading.Lock()
+
 def thumbnail(name):
     """A small cached JPEG for lists and backdrops. Media names are unique and never rewritten, so the cache never goes stale."""
     src=media_path(name)
     folder=MEDIA/'.thumbs';folder.mkdir(exist_ok=True)
     out=folder/(name+'.jpg')
     if out.is_file():return out
-    tmp=folder/('.'+uid()+'.jpg')
-    try:
-        for seek in (['-ss','0.3'],[]):
-            try:ffmpeg([*seek,'-i',str(src),'-frames:v','1','-vf','scale=360:-2','-q:v','5',str(tmp)])
-            except subprocess.CalledProcessError:continue
-            if tmp.is_file() and tmp.stat().st_size:break
-        else:raise ValueError('无法生成缩略图')
-        tmp.replace(out)
-    finally:tmp.unlink(missing_ok=True)
+    with _thumb_lock:
+        if out.is_file():return out
+        tmp=folder/('.'+uid()+'.jpg')
+        try:
+            for seek in (['-ss','0.3'],[]):
+                try:ffmpeg([*seek,'-i',str(src),'-frames:v','1','-vf','scale=360:-2','-q:v','5',str(tmp)])
+                except subprocess.CalledProcessError:continue
+                if tmp.is_file() and tmp.stat().st_size:break
+            else:raise ValueError('无法生成缩略图')
+            tmp.replace(out)
+        finally:tmp.unlink(missing_ok=True)
     return out
 
 def enqueue_assembly(p,payload,nonce):
@@ -1021,7 +1025,7 @@ def work_once():
             state=result['state']
         if state=='succeeded' and row['kind'] in ('image','video','audio'):
             update_job(row['id'],'running',result)
-            from media_bridge import receive
+            from .media_bridge import receive
             file=result.get('candidate_file')
             if not file:
                 file=receive(result['result']['url'],row['kind'],MEDIA)
@@ -1114,8 +1118,8 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     info=json.loads(subprocess.check_output(['ffprobe','-v','error','-show_streams','-of','json',str(dest)],timeout=30))
                     if not info.get('streams'):raise ValueError('媒体无有效轨道')
-                except Exception:
-                    dest.unlink(missing_ok=True); raise ValueError('媒体格式验证失败')
+                except Exception as err:
+                    dest.unlink(missing_ok=True); raise ValueError('媒体格式验证失败') from err
                 return self.respond({'file':name,'streams':[s['codec_type'] for s in info['streams']]})
             if length>2*1024*1024:raise ValueError('请求过大')
             body=json.loads(self.rfile.read(length) or '{}')
@@ -1193,6 +1197,3 @@ def main():
         return
     except (OSError, ValueError, sqlite3.Error) as error:
         parser.exit(1,f'流幕：{error}\n')
-
-if __name__=='__main__':
-    main()

@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import unittest
 
-from providers import Dify
+from luma.providers import Dify
 
 spec = importlib.util.spec_from_file_location('build_audio', Path(__file__).parents[1]/'workflows/build_audio.py')
 audio = importlib.util.module_from_spec(spec)

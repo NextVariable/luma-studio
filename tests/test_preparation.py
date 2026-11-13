@@ -4,12 +4,12 @@ import json
 import os
 import unittest
 from unittest.mock import patch
-import studio
-import production
-import preparation
+from luma import studio
+from luma import production
+from luma import preparation
 import test_studio
 from preparation_fixture import prepare
-from providers import Dify
+from luma.providers import Dify
 
 
 class PreparationTests(unittest.TestCase):

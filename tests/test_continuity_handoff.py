@@ -1,6 +1,7 @@
 import copy,json,unittest
 from unittest.mock import patch
-import studio,production,preparation,creative,continuity,assembly,test_studio
+from luma import studio, production, preparation, creative, continuity, assembly
+import test_studio
 import test_creative_acceptance as acceptance
 
 class ContinuityHandoffTests(unittest.TestCase):

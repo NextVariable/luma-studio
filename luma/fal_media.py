@@ -9,7 +9,7 @@ import time
 import urllib.error
 import urllib.request
 
-from providers import UncertainRun, open_request
+from .providers import UncertainRun, open_request
 
 BASE = 'https://queue.fal.run'
 IMAGE = 'fal-ai/flux-pro/kontext'

@@ -1,5 +1,6 @@
 import copy,json,unittest
-import production,studio,test_studio
+from luma import production, studio
+import test_studio
 
 class RevisionPreviewTests(unittest.TestCase):
     setUp=test_studio.StudioTests.setUp

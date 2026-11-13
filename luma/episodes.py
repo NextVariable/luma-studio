@@ -49,7 +49,7 @@ def production_snapshot(p, episode_id=None):
     if ep is None:
         raise ValueError('剧集不存在')
     p.update(episode_id=ep['id'], episode_title=ep['title'], script=ep['script'])
-    import continuity
+    from . import continuity
     p['continuity_dependencies']={s['id']:continuity.basis(p,s) for s in p['shots'] if s['episode_id']==episode_id}
     p['shots'] = [s for s in p['shots'] if s['episode_id'] == episode_id]
     return p

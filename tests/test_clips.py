@@ -1,5 +1,6 @@
-import json, subprocess, unittest
-import studio, production, test_studio
+import json, unittest
+from luma import studio, production
+import test_studio
 
 
 class ClipTests(unittest.TestCase):
@@ -71,6 +72,7 @@ class ClipTests(unittest.TestCase):
         other = production.add_take(self.p['shots'][0], 'video', 'other.mp4')
         self.p = studio.save(self.p, self.p['revision'])
         s = self.edit(action='set_clip', shot_id='s1', source_take_id=other['id'], trim_start=0.5)
+        self.assertNotEqual(selected, other['id'])
         self.assertEqual(s['selected_takes']['video'], other['id'])
         self.assertEqual(s['video'], 'other.mp4')
         self.assertEqual(s['trim_start'], 0.5)
@@ -84,7 +86,7 @@ class ClipTests(unittest.TestCase):
                 self.edit(action='set_clip', shot_id='s1', source_take_id=take, **bad)
 
     def test_unknown_or_audio_candidate_is_rejected(self):
-        s = self.shot_with_video(duration=2)
+        self.shot_with_video(duration=2)
         with self.assertRaisesRegex(ValueError, '候选'):
             self.edit(action='set_clip', shot_id='s1', source_take_id='nope', trim_start=0)
         self.p['shots'][0]['takes'].append({'id': 'a1', 'kind': 'audio', 'file': self.video('a.mp4', 1), 'label': 'x', 'source': 'import', 'created': 0})
@@ -93,7 +95,7 @@ class ClipTests(unittest.TestCase):
             self.edit(action='set_clip', shot_id='s1', source_take_id='a1', trim_start=0)
 
     def test_clip_pointing_at_a_missing_candidate_fails_validation(self):
-        s = self.shot_with_video(duration=2)
+        self.shot_with_video(duration=2)
         self.p['shots'][0]['clip'] = {'source_take_id': 'gone', 'trim_start': 0, 'trim_end': None}
         with self.assertRaisesRegex(ValueError, '候选'):
             studio.save(self.p, self.p['revision'])
@@ -110,7 +112,7 @@ class ClipTests(unittest.TestCase):
             self.edit(action='set_clip', shot_id='s1', source_take_id=take, trim_start=0)
 
     def test_changing_the_cut_does_not_stale_the_text_plan(self):
-        import production as pr
+        from luma import production as pr
         s = self.shot_with_video(duration=2)
         snap = pr.scope(self.p, self.p['episodes'][0]['id'], 's1', '近景')
         self.edit(action='set_clip', shot_id='s1', source_take_id=s['selected_takes']['video'], trim_start=1)

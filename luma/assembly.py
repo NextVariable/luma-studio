@@ -2,8 +2,8 @@
 import copy
 import math
 import hashlib
-import preparation
-import production
+from . import preparation
+from . import production
 
 
 def source_plan(p,sid,media_path,probe):

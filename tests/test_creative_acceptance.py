@@ -3,9 +3,9 @@ import copy
 import json
 import unittest
 from unittest.mock import patch
-import studio
-import production
-import creative
+from luma import studio
+from luma import production
+from luma import creative
 import test_studio
 from test_drama_import import bundle
 
@@ -156,7 +156,7 @@ class CreativeAcceptanceTests(unittest.TestCase):
     def test_existing_import_with_mismatched_entry_is_not_automatically_certified(self):
         b=bundle();b['files']['episode-state.json']['episodes'][0]['knownBy']['hero'].append('新版本')
         # Build a pre-upgrade stored project with an entry copied from an older state.
-        import drama_import
+        from luma import drama_import
         p=drama_import.convert(b)['project'];p['episodes'][1]['creative_spec']['entry_state']={'knownBy':{'hero':['旧版本']}}
         p=studio.save(p,0)
         self.assertTrue(creative.continuity_status(p,'EP002')['requires_confirmation'])

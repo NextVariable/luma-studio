@@ -2,7 +2,7 @@ import io
 import json
 import unittest
 from unittest.mock import patch
-from providers import Dify
+from luma.providers import Dify
 
 
 class ConnectionCheckTests(unittest.TestCase):

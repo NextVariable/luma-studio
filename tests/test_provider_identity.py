@@ -1,7 +1,8 @@
 import itertools, json, os, unittest
 from unittest.mock import patch
-import studio, test_studio
-from providers import Dify
+from luma import studio
+import test_studio
+from luma.providers import Dify
 
 SECRET = 'app-SECRET-VALUE-0123456789'
 BASE = 'https://api.dify.ai/v1'
@@ -58,7 +59,7 @@ class ProviderIdentityTests(unittest.TestCase):
         self.add_shot()
         studio.ffmpeg(['-f', 'lavfi', '-i', 'color=c=blue:size=160x90', '-frames:v', '1', str(studio.MEDIA / 'b.png')])
         s = self.p['shots'][0]
-        import production
+        from luma import production
         production.select_take(s, production.add_take(s, 'image', 'b.png')['id'])
         self.p = studio.save(self.p, self.p['revision'])
         self.p['shots'][0].update(approved=True, needs_review=False)
@@ -98,7 +99,6 @@ class ProviderIdentityTests(unittest.TestCase):
 
     def test_changed_key_blocks_reconcile_without_calling_dify(self):
         jid = self.queue()
-        payload = self.payload(jid)
         with studio.connect() as c:
             c.execute("update jobs set state='interrupted', result=? where id=?", (json.dumps({'run_id': 'remote-run'}), jid))
         with self.env(key='app-rotated-key-999999'), patch.object(Dify, 'listen') as listen, patch.object(Dify, 'run') as run:

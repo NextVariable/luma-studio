@@ -1,6 +1,7 @@
 import copy,json,os,unittest
 from unittest.mock import patch
-import studio,production,test_studio
+from luma import studio, production
+import test_studio
 
 class ProductionTests(unittest.TestCase):
     setUp=test_studio.StudioTests.setUp
@@ -16,14 +17,14 @@ class ProductionTests(unittest.TestCase):
             jid=studio.enqueue(self.p['id'],'shots',{},'queued')
             studio.set_spending(0)
             with self.assertRaisesRegex(ValueError,'暂停'):studio.enqueue(self.p['id'],'shots',{},'second')
-            with patch('studio.Dify.run') as run:
+            with patch('luma.studio.Dify.run') as run:
                 studio.work_once();run.assert_not_called()
         with studio.connect() as c:self.assertEqual(c.execute('select state from jobs where id=?',(jid,)).fetchone()[0],'failed')
 
     def test_budget_counts_unknown_attempt_without_refund(self):
         studio.set_spending(1)
-        with patch.dict(os.environ,{'DIFY_SHOTS_KEY':'mock'}):jid=studio.enqueue(self.p['id'],'shots',{},'one')
-        with patch.dict(os.environ,{'DIFY_SHOTS_KEY':'mock'}),patch('studio.Dify.run',side_effect=studio.UncertainRun('未知')):studio.work_once()
+        with patch.dict(os.environ,{'DIFY_SHOTS_KEY':'mock'}):studio.enqueue(self.p['id'],'shots',{},'one')
+        with patch.dict(os.environ,{'DIFY_SHOTS_KEY':'mock'}),patch('luma.studio.Dify.run',side_effect=studio.UncertainRun('未知')):studio.work_once()
         self.assertEqual(studio.spending(),{'remaining':0,'used':1})
 
     def test_asset_edit_retains_old_version_and_binding(self):
@@ -96,7 +97,7 @@ class ProductionTests(unittest.TestCase):
         self.assertEqual(r['ok'],0);self.assertEqual(r['result']['status'],'blocked')
 
     def test_download_rejects_local_url(self):
-        from media_bridge import receive
+        from luma.media_bridge import receive
         with self.assertRaises(ValueError):receive('http://127.0.0.1/secret','image',studio.MEDIA)
 
     def test_continuity_cycle_rejected(self):
@@ -122,7 +123,7 @@ class ProductionTests(unittest.TestCase):
 
     def test_dify_upload_and_run_share_user_and_file_binding(self):
         import io
-        from providers import Dify
+        from luma.providers import Dify
         self.add_shot();f=self.fixture();snap=production.scope(self.p,self.p['episodes'][0]['id'],'s1')
         snap['reference_media']=[{'file':f,'role':'start_frame'}]
         calls=[]
@@ -147,7 +148,7 @@ class ProductionTests(unittest.TestCase):
         result={'state':'succeeded','result':{'url':'https://example.com/frame.png'}}
         def finished(*args,**kwargs):
             p=studio.project(self.p['id']);p['shots'][0]['locked']=True;studio.save(p,p['revision']);return result
-        with patch.dict(os.environ,{'DIFY_IMAGE_KEY':'mock'}),patch('studio.Dify.run',side_effect=finished),patch('media_bridge.receive',return_value=f):studio.work_once()
+        with patch.dict(os.environ,{'DIFY_IMAGE_KEY':'mock'}),patch('luma.studio.Dify.run',side_effect=finished),patch('luma.media_bridge.receive',return_value=f):studio.work_once()
         p=studio.project(self.p['id']);s=p['shots'][0]
         self.assertTrue(s['locked']);self.assertNotIn('image',s);self.assertEqual(s['takes'][0]['file'],f)
         with studio.connect() as c:r=c.execute('select * from jobs where id=?',(jid,)).fetchone()
@@ -160,7 +161,7 @@ class ProductionTests(unittest.TestCase):
         with patch.dict(os.environ,{'DIFY_IMAGE_KEY':'mock'}):jid=studio.enqueue(self.p['id'],'image',{'shot_id':'s1'},'deleted')
         def finished(*args,**kwargs):
             p=studio.project(self.p['id']);p['shots']=[];studio.save(p,p['revision']);return {'state':'succeeded','result':{'url':'https://example.com/frame.png'}}
-        with patch.dict(os.environ,{'DIFY_IMAGE_KEY':'mock'}),patch('studio.Dify.run',side_effect=finished),patch('media_bridge.receive',return_value=f):studio.work_once()
+        with patch.dict(os.environ,{'DIFY_IMAGE_KEY':'mock'}),patch('luma.studio.Dify.run',side_effect=finished),patch('luma.media_bridge.receive',return_value=f):studio.work_once()
         with studio.connect() as c:r=c.execute('select * from jobs where id=?',(jid,)).fetchone()
         self.assertEqual(r['state'],'failed');self.assertEqual(json.loads(r['result'])['candidate_file'],f)
 

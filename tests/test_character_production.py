@@ -1,7 +1,7 @@
 import copy, json, os, unittest, wave
 from unittest.mock import patch
-import studio, production, test_studio
-from providers import Dify
+from luma import studio, production
+import test_studio
 
 
 class CharacterProductionTests(unittest.TestCase):
@@ -62,7 +62,7 @@ class CharacterProductionTests(unittest.TestCase):
         unit=payload['generation_unit']
         self.assertEqual(unit['shot_ids'],['s1']);self.assertTrue(unit['references'][0]['sha256'])
         (studio.MEDIA/'front.png').write_bytes(b'changed')
-        with patch.dict(os.environ,{'DIFY_IMAGE_KEY':'test'}),patch('studio.Dify.run') as run:
+        with patch.dict(os.environ,{'DIFY_IMAGE_KEY':'test'}),patch('luma.studio.Dify.run') as run:
             studio.work_once();run.assert_not_called()
         self.assertEqual(studio.spending()['used'],0)
 
@@ -78,7 +78,7 @@ class CharacterProductionTests(unittest.TestCase):
 
     def test_excess_character_references_are_refused_before_queueing(self):
         self.add_shot()
-        with patch('production.reference_plan',return_value={'items':[{'file':'view.png'}]*11,'mode':'references','omitted':[]}),patch.dict(os.environ,{'DIFY_IMAGE_KEY':'test'}):
+        with patch('luma.production.reference_plan',return_value={'items':[{'file':'view.png'}]*11,'mode':'references','omitted':[]}),patch.dict(os.environ,{'DIFY_IMAGE_KEY':'test'}):
             with self.assertRaisesRegex(ValueError,'制作准备'):studio.enqueue(self.p['id'],'image',{'shot_id':'s1'},'too-many-views')
         with studio.connect() as c:self.assertEqual(c.execute('select count(*) from jobs').fetchone()[0],0)
         self.assertEqual(studio.spending()['used'],0)

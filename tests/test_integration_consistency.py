@@ -1,6 +1,7 @@
 import copy,json,os,unittest
 from unittest.mock import patch
-import studio,production,providers,test_studio,test_adoption
+from luma import studio, production, providers
+import test_studio, test_adoption
 
 class ConsistencyTests(unittest.TestCase):
     setUp=test_studio.StudioTests.setUp

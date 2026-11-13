@@ -3,7 +3,7 @@
 Use a fresh data directory when developing against an existing studio installation:
 
 ```sh
-AUTEUR_DATA=./data/dev PORT=7821 python3 studio.py
+AUTEUR_DATA=./data/dev PORT=7821 python3 -m luma
 ```
 
 Run both suites before submitting a pull request:

@@ -91,7 +91,7 @@ function bindParts(view,p,s,list,it){
       }};
       pop.showModal();
     }else pop.onkeydown=e=>{if(e.key==='Escape'){e.stopPropagation();close()}};
-    ({settings:bindSettings,dialogue:bindDialogue,media:bindMedia,make:bindMake})[tab](body,p,s,list);
+    ({settings:bindSettings,dialogue:bindDialogue,media:bindMedia,make:bindMake})[tab](body,p,s,list,it);
   }
 }
 L.showShot=(id,direction,axis)=>{
@@ -341,7 +341,7 @@ function media(p,s,it){
     ${binds.length?`<div class="sub">角色与素材版本</div>${binds.map(({a,vid})=>`<div class="row"><span style="flex:1">${esc(a.name)}</span><select class="select" data-bind-asset="${esc(a.id)}" style="width:auto;max-width:190px" ${dis}>${a.versions.map(v=>`<option value="${esc(v.id)}" ${v.id===vid?'selected':''}>${esc(v.label||v.outfit||'版本')}${v.id===a.selected_version?'（当前）':''}</option>`).join('')}</select></div>`).join('')}
       <button class="btn ghost small" id="bind-current" style="align-self:flex-start" ${dis}>全部更新为素材当前版本</button>`:''}`;
 }
-function bindMedia(view,p,s,list){
+function bindMedia(view,p,s,list,it){
   const importVisual=async()=>{const f=await L.pickFile('image/*,video/mp4,video/quicktime');if(!f)return;const file=await L.upload(f,'visual');const kind=L.isVideo(file)?'video':'image';
     await L.production('add_take',{shot_id:s.id,kind,file,label:f.name.slice(0,60)});const t=L.shot().takes.at(-1);await L.production('select_take',{shot_id:s.id,take_id:t.id});L.toast('画面已导入并选用');L.render()};
   $('#m-import',view).onclick=e=>L.busy(e.currentTarget,importVisual);
@@ -349,6 +349,7 @@ function bindMedia(view,p,s,list){
   $('#keep-media',view)?.addEventListener('click',e=>L.busy(e.currentTarget,async()=>{await L.production('confirm_media',{shot_id:s.id});L.done('已确认沿用这张画面');L.render()}));
   $$('[data-take]',view).forEach(b=>b.onclick=()=>L.busy(b,async()=>{
     const t=s.takes.find(x=>x.id===b.dataset.take);if(b.getAttribute('aria-pressed')==='true')return;
+    if(L.candidateOutdated(t,it?.basis)&&!(await L.confirmBox('选用旧画面？','这个候选是用设定改动前的内容生成的，选用后需要重新确认画面。','仍要选用')))return;
     await L.production('select_take',{shot_id:s.id,take_id:t.id});
     L.toast(item(L.shot())?.stale_media?'已选中旧画面，请确认沿用或更换':'已选用');L.render();
   }));

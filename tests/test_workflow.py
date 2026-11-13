@@ -1,7 +1,7 @@
 import unittest,json,uuid
 from pathlib import Path
-import production
-from drama_import import convert
+from luma import production
+from luma.drama_import import convert
 from test_drama_import import bundle
 
 class WorkflowTests(unittest.TestCase):

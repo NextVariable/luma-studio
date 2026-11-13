@@ -1,8 +1,8 @@
 """Published list-price estimates. A quote is not a provider spending cap."""
 from decimal import Decimal
 
-import fal_media
-import openai_direct
+from . import fal_media
+from . import openai_direct
 
 
 def estimate(kind, provider, model=None, duration=None, instruction=''):

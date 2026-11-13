@@ -3,8 +3,8 @@ import os
 import unittest
 from unittest.mock import patch
 
-import production
-import studio
+from luma import production
+from luma import studio
 import test_studio
 
 

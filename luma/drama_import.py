@@ -2,8 +2,8 @@
 import copy
 import json
 from pathlib import Path
-import production
-import creative
+from . import production
+from . import creative
 
 FORMAT = 'luma-short-drama-v1'
 

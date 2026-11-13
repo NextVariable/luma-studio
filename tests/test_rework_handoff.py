@@ -1,6 +1,7 @@
-import copy,json,hashlib,unittest
+import copy,json,unittest
 from unittest.mock import patch
-import studio,production,preparation,assembly,test_studio,test_assembly
+from luma import studio, production, preparation, assembly
+import test_studio, test_assembly
 
 class ReworkHandoffTests(unittest.TestCase):
     setUp=test_studio.StudioTests.setUp

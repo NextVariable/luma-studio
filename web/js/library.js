@@ -2,12 +2,6 @@
 (function(){
 const {esc,$,$$}=L;
 
-function cover(p){
-  const s=p.shots.find(x=>x.image||x.video);
-  if(!s)return '<div class="cover empty"></div>';
-  return `<div class="cover" style="background-image:url('${L.thumb(s.image||s.video)}')"></div>`;
-}
-
 L.views=L.views||new Object();
 L.views.library=view=>{
   const ps=[...L.S.data.projects].sort((a,b)=>(b.updated||0)-(a.updated||0));

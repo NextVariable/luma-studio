@@ -172,7 +172,7 @@ def issues(project):
         sid = shot['id']
         screenplay=episodes[shot['episode_id']].get('creative_spec',{}).get('screenplay',{})
         scenes={s['id'] for s in screenplay.get('scenes',[])}
-        def add(message, severity='error', rule='structure'):
+        def add(message, severity='error', rule='structure', sid=sid):
             out.append({'shot_id': sid, 'severity': severity, 'rule': rule, 'message': message})
         if not isinstance(spec, dict) or spec.get('schema_version') != SCHEMA_VERSION:
             add('不支持的创作规格版本'); continue

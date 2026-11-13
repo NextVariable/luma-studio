@@ -1,7 +1,7 @@
 """Dify Service API adapter. Credentials and form tokens stay on the server."""
 import hashlib, json, os, ssl, urllib.request, urllib.error, uuid, mimetypes
 from urllib.parse import urlparse, quote, urlencode
-from contracts import validate
+from .contracts import validate
 
 
 class UncertainRun(ValueError):

@@ -7,8 +7,8 @@ import unittest
 import wave
 from unittest.mock import patch
 
-import openai_direct
-import studio
+from luma import openai_direct
+from luma import studio
 import test_studio
 
 

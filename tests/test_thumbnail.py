@@ -3,7 +3,7 @@ import json
 import subprocess
 import unittest
 
-import studio
+from luma import studio
 import test_studio
 
 
@@ -33,7 +33,7 @@ class ThumbnailTests(unittest.TestCase):
                 studio.thumbnail(bad)
 
     def test_backup_ignores_the_thumbnail_cache(self):
-        import local_storage
+        from luma import local_storage
         studio.ffmpeg(['-f', 'lavfi', '-i', 'color=c=blue:size=64x64', '-frames:v', '1', str(studio.MEDIA / 'p.png')])
         studio.thumbnail('p.png')
         local_storage.backup(studio.DATA, studio.DATA.parent / (studio.DATA.name + '-bk'))

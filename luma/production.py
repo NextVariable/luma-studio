@@ -4,7 +4,7 @@ import hashlib
 import json
 import time
 import uuid
-import creative
+from . import creative
 
 LEGACY_SHOT_FIELDS = ('description', 'duration', 'framing', 'camera', 'dialogue', 'lines', 'asset_ids', 'asset_bindings', 'continuity_from')
 SHOT_FIELDS = LEGACY_SHOT_FIELDS + ('creative_spec',)
@@ -306,15 +306,15 @@ def review_basis(snapshot):
 
 
 def readiness(p, episode_id):
-    from episodes import production_snapshot
-    import preparation
+    from .episodes import production_snapshot
+    from . import preparation
     snap=production_snapshot(p,episode_id);items=[]
     state_status=creative.continuity_status(p,episode_id)
     for i,s in enumerate(snap['shots'],1):
         has_visual=bool(s.get('image') or s.get('video'))
         stale_media=media_issue(s)
         checks=[]
-        def check(status, label, action):
+        def check(status, label, action, checks=checks):
             checks.append({'status':status,'label':label,'action':action})
         if stale_media:check('blocked',stale_media,'media')
         elif not has_visual:
@@ -383,7 +383,7 @@ def readiness(p, episode_id):
             'can_export':bool(items) and all(x['ready'] for x in items),'delivery_basis':delivery_basis(snap),'review_basis':review_basis(snap),'continuity':state_status}
 
 def scope(p, episode_id, shot_id=None, instruction='', legacy=False):
-    from episodes import production_snapshot
+    from .episodes import production_snapshot
     snap=production_snapshot(p,episode_id)
     creative.require_current_state(p,snap['episode_id'])
     if shot_id:

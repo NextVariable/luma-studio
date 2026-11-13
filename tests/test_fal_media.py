@@ -5,10 +5,9 @@ import os
 import unittest
 from unittest.mock import patch
 
-import fal_media
-import production
-import studio
-from providers import UncertainRun
+from luma import fal_media
+from luma import studio
+from luma.providers import UncertainRun
 from test_openai_direct import RealtimeSocket, reply
 import test_studio
 
@@ -109,9 +108,9 @@ class FalMediaTests(unittest.TestCase):
         env = {'FAL_KEY': 'test-only', 'OPENAI_API_KEY': 'sk-offline'}
         files = {'image': 'fixture.png', 'video': 'fixture.mp4'}
         with patch.dict(os.environ, env), patch.object(fal_media.Fal, 'request', side_effect=request), \
-                patch('media_bridge.receive', side_effect=lambda url, kind, folder: files[kind]), \
-                patch('openai_direct.open_realtime', side_effect=lambda key: RealtimeSocket()), \
-                patch('openai_direct.open_request', side_effect=[
+                patch('luma.media_bridge.receive', side_effect=lambda url, kind, folder: files[kind]), \
+                patch('luma.openai_direct.open_realtime', side_effect=lambda key: RealtimeSocket()), \
+                patch('luma.openai_direct.open_request', side_effect=[
                     reply({'id':'s2','changes':{'framing':'近景','description':'近景：守夜人停下看信'}}),
                     reply({'passed':True,'issues':[]})]):
             for i in range(1, 4):

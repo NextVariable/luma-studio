@@ -1,6 +1,7 @@
 import copy,json,subprocess,unittest
 from unittest.mock import patch
-import studio,production,preparation,test_studio
+from luma import studio, production, preparation
+import test_studio
 
 class AssemblyTests(unittest.TestCase):
     setUp=test_studio.StudioTests.setUp

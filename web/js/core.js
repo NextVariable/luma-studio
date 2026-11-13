@@ -228,7 +228,7 @@ L.swap=(el,direction,mutate,{content,axis='y'}={})=>{
   swaps.set(el,finish);
   Promise.allSettled(animations.map(animation=>animation.finished)).then(finish);
 };
-L.pagingBlocked=()=>!!L.$('dialog[open]')||L.S.drawer||!!L.$('.menu');
+L.pagingBlocked=()=>!!L.$('dialog[open]')||!!L.$('.menu');
 
 /* 提示 */
 L.toast=(msg,err=false)=>{

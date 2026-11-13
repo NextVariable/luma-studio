@@ -1,6 +1,6 @@
 import copy, json, unittest
 import test_studio
-import studio
+from luma import studio
 
 class AuditRegressions(unittest.TestCase):
  setUp=test_studio.StudioTests.setUp

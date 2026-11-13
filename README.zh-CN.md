@@ -4,7 +4,7 @@
 
 流幕是面向分集漫剧的本机制作工作台。把剧本、角色造型、镜头和对白放在同一部作品里，按镜头返工，最后导出整集 MP4。
 
-[English](README.md) · [架构与数据](docs/architecture.md) · [服务配置](docs/providers.md) · [贡献指南](CONTRIBUTING.md)
+[English](README.md) · [架构与数据](docs/architecture.md) · [服务配置](docs/providers.md) · [贡献指南](CONTRIBUTING.md) · [更新记录](CHANGELOG.md)
 
 **当前为开发预览版。** 导入素材后可以在本机完成制作、复核和导出，无需模型账号。云端生成可使用自己的服务商凭据，完整的云端生成成片仍待端到端验收。
 
@@ -15,8 +15,8 @@
 ```sh
 git clone https://github.com/NextVariable/luma-studio.git
 cd luma-studio
-python3 studio.py check
-python3 studio.py
+python3 -m luma check
+python3 -m luma
 ```
 
 打开[本机工作台](http://127.0.0.1:7820/)。
@@ -49,11 +49,19 @@ python3 studio.py
 
 ## 数据与开发
 
-流幕默认只在本机监听。仓库结构、备份和恢复见[架构与数据](docs/architecture.md)。
+流幕默认只在本机监听。备份和恢复见[架构与数据](docs/architecture.md)。
+
+| 路径 | 内容 |
+| --- | --- |
+| [`luma/`](luma/) | Python 包：HTTP 服务、SQLite、任务队列、服务适配、FFmpeg 导出 |
+| [`web/`](web/) | 原生 JavaScript 浏览器工作台、样式和随附素材 |
+| [`workflows/`](workflows/) | Dify 工作流定义及其生成脚本 |
+| [`tests/`](tests/) | Python 与 JavaScript 回归测试 |
+| [`docs/`](docs/) | 架构与服务配置 |
 
 ```sh
 python3 -m unittest discover -s tests -v
 node --test tests/*.test.js
 ```
 
-前端测试使用 Node.js 22+。参见 [MIT 许可](LICENSE)、[第三方声明](THIRD_PARTY_NOTICES.md)和[安全问题报告](SECURITY.md)。
+前端测试使用 Node.js 22+。参见 [MIT 许可](LICENSE)、[第三方声明](THIRD_PARTY_NOTICES.md)和[安全问题报告](SECURITY.md)和[行为准则](CODE_OF_CONDUCT.md)。

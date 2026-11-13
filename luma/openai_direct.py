@@ -14,8 +14,8 @@ import wave
 from contextlib import closing
 from urllib.parse import urlencode
 
-from contracts import validate
-from providers import UncertainRun, encode_context, open_request
+from .contracts import validate
+from .providers import UncertainRun, encode_context, open_request
 
 BASE = 'https://api.openai.com/v1'
 MODELS = {'audio': 'gpt-realtime-2.1-mini', 'revision': 'gpt-5.4-mini'}

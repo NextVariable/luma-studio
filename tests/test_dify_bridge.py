@@ -1,9 +1,9 @@
 import io, json, os, unittest
 from unittest.mock import patch
 import test_studio
-import studio
-from providers import Dify
-import providers
+from luma import studio
+from luma.providers import Dify
+from luma import providers
 
 
 def stream(*events):
@@ -14,7 +14,7 @@ class DifyBridgeTests(unittest.TestCase):
     def test_tls_verification_failure_is_not_an_unknown_remote_execution(self):
         import ssl, urllib.error
         failure=urllib.error.URLError(ssl.SSLCertVerificationError('unknown CA'))
-        with patch.dict(os.environ, {'DIFY_PRODUCTION_KEY':'not-real'}), patch('providers.open_request',side_effect=failure):
+        with patch.dict(os.environ, {'DIFY_PRODUCTION_KEY':'not-real'}), patch('luma.providers.open_request',side_effect=failure):
             with self.assertRaisesRegex(ValueError,'证书验证失败.*请求未提交') as error:
                 Dify().run('shots',{'id':'p','script':'剧情','revision':1})
             self.assertNotIsInstance(error.exception,providers.UncertainRun)
@@ -32,7 +32,7 @@ class DifyBridgeTests(unittest.TestCase):
         self.assertIsNone(providers.NoRedirect().redirect_request(request,None,302,'redirect',{},'https://other.example/'))
 
     def run_stream(self, *events):
-        with patch.dict(os.environ, {'DIFY_PRODUCTION_KEY':'not-real'}), patch('providers.open_request', return_value=stream(*events)) as request:
+        with patch.dict(os.environ, {'DIFY_PRODUCTION_KEY':'not-real'}), patch('luma.providers.open_request', return_value=stream(*events)) as request:
             result = Dify().run('shots', {'id':'p','script':'剧情','revision':1})
             body = json.loads(request.call_args.args[0].data)
             self.assertEqual(body['response_mode'], 'streaming')
@@ -71,7 +71,7 @@ class DifyBridgeTests(unittest.TestCase):
     def test_paused_form_is_loaded_and_keeps_run_identity(self):
         form={'form_content':'审核分镜','inputs':[{'type':'paragraph','output_variable_name':'notes'}],
               'user_actions':[{'id':'approve','title':'通过'},{'id':'revise','title':'修改'}]}
-        with patch.dict(os.environ, {'DIFY_PRODUCTION_KEY':'not-real'}), patch('providers.open_request', side_effect=[
+        with patch.dict(os.environ, {'DIFY_PRODUCTION_KEY':'not-real'}), patch('luma.providers.open_request', side_effect=[
             stream({'event':'human_input_required','workflow_run_id':'r','task_id':'t','data':{'form_token':'private-token'}}),
             io.BytesIO(json.dumps(form).encode())]):
             result=Dify().run('shots',{'id':'p'})
@@ -87,7 +87,7 @@ class DifyBridgeTests(unittest.TestCase):
     def test_reconnect_uses_get_and_original_user(self):
         finished={'event':'workflow_finished','workflow_run_id':'remote-run','data':{'status':'succeeded','outputs':{
             'approved_end_result':{'status':'creative_approved','shots':[{'description':'镜头','duration':5}]}}}}
-        with patch.dict(os.environ,{'DIFY_PRODUCTION_KEY':'not-real'}),patch('providers.open_request',return_value=stream(finished)) as request:
+        with patch.dict(os.environ,{'DIFY_PRODUCTION_KEY':'not-real'}),patch('luma.providers.open_request',return_value=stream(finished)) as request:
             Dify().listen('shots',{'id':'project1','revision':1},{'run_id':'remote-run'})
         req=request.call_args.args[0]
         self.assertEqual(req.get_method(),'GET')
@@ -95,26 +95,26 @@ class DifyBridgeTests(unittest.TestCase):
         self.assertIn('user=auteur-project1',req.full_url)
 
     def test_approval_submit_uses_original_form_and_identity(self):
-        with patch.dict(os.environ,{'DIFY_PRODUCTION_KEY':'not-real'}),patch('providers.open_request',return_value=io.BytesIO(b'{}')) as request:
+        with patch.dict(os.environ,{'DIFY_PRODUCTION_KEY':'not-real'}),patch('luma.providers.open_request',return_value=io.BytesIO(b'{}')) as request:
             Dify().submit('shots',{'id':'project1'},{'form_token':'private-form'},'revise',{'notes':'改第三镜'})
         req=request.call_args.args[0]
         self.assertTrue(req.full_url.endswith('/form/human_input/private-form'))
         self.assertEqual(json.loads(req.data),{'action':'revise','inputs':{'notes':'改第三镜'},'user':'auteur-project1'})
 
     def test_accepted_empty_submit_response_does_not_reopen_form(self):
-        with patch.dict(os.environ,{'DIFY_PRODUCTION_KEY':'not-real'}),patch('providers.open_request',return_value=io.BytesIO(b'')):
+        with patch.dict(os.environ,{'DIFY_PRODUCTION_KEY':'not-real'}),patch('luma.providers.open_request',return_value=io.BytesIO(b'')):
             Dify().submit('shots',{'id':'p'},{'form_token':'private-form'},'approve',{})
 
     def test_reconnect_does_not_reuse_previous_approval_token(self):
         previous={'run_id':'r','form_token':'old-form','review_id':'old-review','form':{'user_actions':[{'id':'approve'}]}}
-        with patch.dict(os.environ,{'DIFY_PRODUCTION_KEY':'not-real'}),patch('providers.open_request',return_value=stream({'event':'workflow_paused','data':{}})):
+        with patch.dict(os.environ,{'DIFY_PRODUCTION_KEY':'not-real'}),patch('luma.providers.open_request',return_value=stream({'event':'workflow_paused','data':{}})):
             result=Dify().listen('shots',{'id':'p'},previous)
         self.assertFalse(result.get('review_id'))
         self.assertNotIn('form_token',result)
 
     def test_context_excludes_other_episode_scripts(self):
         done={'event':'workflow_finished','data':{'status':'succeeded','outputs':{'result':{'shots':[]}}}}
-        with patch.dict(os.environ,{'DIFY_PRODUCTION_KEY':'','DIFY_SHOTS_KEY':'not-real'}),patch('providers.open_request',return_value=stream(done)) as request:
+        with patch.dict(os.environ,{'DIFY_PRODUCTION_KEY':'','DIFY_SHOTS_KEY':'not-real'}),patch('luma.providers.open_request',return_value=stream(done)) as request:
             Dify().run('shots',{'id':'p','script':'本集','episodes':[{'script':'另一集不应发送'}],'assets':[],'revision':1})
         sent=json.loads(json.loads(request.call_args.args[0].data)['inputs']['context'])
         self.assertNotIn('episodes',sent)

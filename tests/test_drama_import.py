@@ -3,12 +3,12 @@ import io
 import json
 import unittest
 from unittest.mock import patch
-import creative
-import drama_import
-import production
-import studio
+from luma import creative
+from luma import drama_import
+from luma import production
+from luma import studio
 import test_studio
-from providers import Dify
+from luma.providers import Dify
 
 
 def bundle():

@@ -1,7 +1,8 @@
 import json, os, sqlite3, subprocess, unittest
 from pathlib import Path
 from unittest.mock import patch
-import studio, production, test_studio
+from luma import studio, production
+import test_studio
 
 
 class FullAuditTests(unittest.TestCase):
@@ -56,8 +57,8 @@ class FullAuditTests(unittest.TestCase):
         with patch.dict(os.environ,{'OPENAI_API_KEY':'sk-offline'}):
             self.p['shots'][0]['dialogue']='你好'
             self.p=studio.save(self.p,self.p['revision'])
-            jid=studio.enqueue(self.p['id'],'audio',{'shot_id':'s1'},'removed-key')
-        with patch.dict(os.environ,{'OPENAI_API_KEY':''}), patch('openai_direct.open_realtime') as run:
+            studio.enqueue(self.p['id'],'audio',{'shot_id':'s1'},'removed-key')
+        with patch.dict(os.environ,{'OPENAI_API_KEY':''}), patch('luma.openai_direct.open_realtime') as run:
             studio.work_once();run.assert_not_called()
         self.assertEqual(studio.spending()['used'],0)
 

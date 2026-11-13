@@ -1,5 +1,6 @@
 import unittest
-import studio, production, test_studio
+from luma import studio, production
+import test_studio
 
 
 class VersionDependencyTests(unittest.TestCase):
