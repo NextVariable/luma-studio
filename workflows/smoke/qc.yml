@@ -2,11 +2,11 @@
   "version": "0.3.0",
   "kind": "app",
   "app": {
-    "name": "Auteur 2.0 · 05 制作质检",
+    "name": "Luma · 05 制作质检",
     "mode": "workflow",
     "icon": "🎬",
     "icon_background": "#E4EDFB",
-    "description": "独立2.0制作工作流；输出需由Auteur校验并人工采纳",
+    "description": "独立2.0制作工作流；输出需由 Luma 校验并人工采纳",
     "use_icon_as_answer_icon": false
   },
   "dependencies": [],

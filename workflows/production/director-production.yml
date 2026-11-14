@@ -2,7 +2,7 @@
   "version": "0.3.1",
   "kind": "app",
   "app": {
-    "name": "Auteur 2.0 · 导演制作编排 v2",
+    "name": "Luma · 导演制作编排 v2",
     "mode": "workflow",
     "icon": "🎬",
     "icon_background": "#E4EDFB",
@@ -1256,7 +1256,7 @@
           "type": "custom",
           "data": {
             "type": "end",
-            "title": "交 Auteur 保存并报价",
+            "title": "交 Luma 保存并报价",
             "desc": "",
             "selected": false,
             "outputs": [
@@ -1284,7 +1284,7 @@
           "type": "custom",
           "data": {
             "type": "end",
-            "title": "交 Auteur 保留版本与待办",
+            "title": "交 Luma 保留版本与待办",
             "desc": "",
             "selected": false,
             "outputs": [

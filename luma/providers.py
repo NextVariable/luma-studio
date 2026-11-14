@@ -109,7 +109,7 @@ class Dify:
         if category not in ('image','audio','video'):raise ValueError('参考素材必须为图片、音频或视频')
         limit={'image':10,'audio':50,'video':100}[category]*1024*1024
         if path.stat().st_size>limit:raise ValueError('参考素材超过 Dify 默认上传限制')
-        boundary='auteur'+uuid.uuid4().hex
+        boundary='luma'+uuid.uuid4().hex
         # Filename is deliberately generated; local names cannot inject MIME headers.
         filename='reference'+path.suffix.lower()
         body=(f'--{boundary}\r\nContent-Disposition: form-data; name="user"\r\n\r\n{user}\r\n'

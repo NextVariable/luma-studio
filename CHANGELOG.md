@@ -16,6 +16,7 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). I
 
 ### Changed
 - The library directory variable is now `LUMA_DATA`. `AUTEUR_DATA` still works.
+- The browser-to-server write header is now `X-Luma`, and the generated Dify workflows are titled "Luma" instead of "Auteur 2.0". Re-import the workflows into Dify to see the new titles. Dify session identifiers (`auteur-<project id>`) and structured-output schema names are unchanged, so runs already in Dify keep resolving.
 - `.env.example` lists the current services first and moves the legacy Dify stage keys into comments.
 - The Python modules moved into the `luma/` package. Start the server with `python3 -m luma`.
 - The browser workspace was rebuilt as vanilla JavaScript modules sharing one `L` namespace. Pure logic lives in `web/js/logic.js` and is tested in Node.

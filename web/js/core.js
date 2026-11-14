@@ -13,7 +13,7 @@ L.thumb=name=>'/thumb/'+encodeURIComponent(name);
 L.isVideo=name=>/\.(mp4|mov)$/i.test(name||'');
 
 L.api=async(path,body)=>{
-  const opt=body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json','X-Auteur':'studio'},body:JSON.stringify(body)};
+  const opt=body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json','X-Luma':'studio'},body:JSON.stringify(body)};
   const r=await fetch(path,opt);let d={};
   try{d=await r.json()}catch(e){throw Error('服务没有返回有效数据，请确认流幕仍在运行')}
   if(!r.ok){const e=Error(d.error||'请求失败');e.server=true;throw e}
@@ -21,7 +21,7 @@ L.api=async(path,body)=>{
 };
 L.upload=async(file,need)=>{
   const ext=(file.name.split('.').pop()||'').toLowerCase();
-  const r=await fetch('/api/upload/'+ext,{method:'POST',headers:{'X-Auteur':'studio'},body:file});
+  const r=await fetch('/api/upload/'+ext,{method:'POST',headers:{'X-Luma':'studio'},body:file});
   const d=await r.json();if(!r.ok)throw Error(d.error||'上传失败');
   const wrong=need==='visual'&&!d.streams.includes('video')?'这个文件没有画面，请选择图片或视频':need==='audio'&&!d.streams.includes('audio')?'这个文件没有声音，请选择音频':null;
   if(wrong){L.api('/api/upload/discard',{file:d.file}).catch(()=>null);throw Error(wrong)}

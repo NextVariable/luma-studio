@@ -1108,7 +1108,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if self.headers.get('Host','').split(':')[0] not in ('127.0.0.1','localhost'):return self.respond({'error':'仅允许本机访问'},403)
             # Browser same-origin and custom header prevent cross-site local writes.
-            if self.headers.get('X-Auteur')!='studio':return self.respond({'error':'拒绝跨站写入'},403)
+            if self.headers.get('X-Luma')!='studio':return self.respond({'error':'拒绝跨站写入'},403)
             origin=self.headers.get('Origin')
             if origin and origin!=f'http://{self.headers.get("Host")}':return self.respond({'error':'来源无效'},403)
             path=urlparse(self.path).path; length=int(self.headers.get('Content-Length','0'))
