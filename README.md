@@ -58,10 +58,12 @@ Luma serves one local library on loopback. See [architecture and data](docs/arch
 | [`workflows/`](workflows/) | Dify workflow definitions and the generators that build them |
 | [`tests/`](tests/) | Python and JavaScript regression suites |
 | [`docs/`](docs/) | Architecture and provider setup |
+| [`pyproject.toml`](pyproject.toml) | Package metadata and lint settings |
 
 ```sh
 python3 -m unittest discover -s tests -v
 node --test tests/*.test.js
+ruff check luma tests workflows
 ```
 
 The JavaScript tests use Node.js 22+. See the [MIT license](LICENSE), [third-party notices](THIRD_PARTY_NOTICES.md), [security reporting](SECURITY.md) and [code of conduct](CODE_OF_CONDUCT.md).

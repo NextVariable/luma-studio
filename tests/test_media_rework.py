@@ -150,6 +150,15 @@ class IsolatedEnvTests(unittest.TestCase):
             studio.load_env()
             self.assertEqual(os.environ['DIFY_REVISION_KEY'], 'app-default')
 
+    def test_data_directory_variable_and_legacy_name(self):
+        import subprocess, sys
+        code = 'from luma import studio; print(studio.DATA, studio.DATA_ISOLATED)'
+        for name in ('LUMA_DATA', 'AUTEUR_DATA'):
+            env = {k: v for k, v in os.environ.items() if k not in ('LUMA_DATA', 'AUTEUR_DATA')}
+            env[name] = '/tmp/luma-env-check'
+            out = subprocess.run([sys.executable, '-c', code], env=env, capture_output=True, text=True, check=True).stdout
+            self.assertEqual(out.split(), ['/tmp/luma-env-check', 'True'])
+
 
 if __name__ == '__main__':
     unittest.main()

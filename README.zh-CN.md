@@ -58,10 +58,12 @@ python3 -m luma
 | [`workflows/`](workflows/) | Dify 工作流定义及其生成脚本 |
 | [`tests/`](tests/) | Python 与 JavaScript 回归测试 |
 | [`docs/`](docs/) | 架构与服务配置 |
+| [`pyproject.toml`](pyproject.toml) | 包信息与静态检查配置 |
 
 ```sh
 python3 -m unittest discover -s tests -v
 node --test tests/*.test.js
+ruff check luma tests workflows
 ```
 
-前端测试使用 Node.js 22+。参见 [MIT 许可](LICENSE)、[第三方声明](THIRD_PARTY_NOTICES.md)和[安全问题报告](SECURITY.md)和[行为准则](CODE_OF_CONDUCT.md)。
+前端测试使用 Node.js 22+。参见 [MIT 许可](LICENSE)、[第三方声明](THIRD_PARTY_NOTICES.md)、[安全问题报告](SECURITY.md)和[行为准则](CODE_OF_CONDUCT.md)。

@@ -17,12 +17,14 @@ from . import openai_direct
 from . import generation_quote
 
 ROOT = Path(__file__).resolve().parent.parent
-DATA = Path(os.environ.get('AUTEUR_DATA', ROOT/'data'))
+# LUMA_DATA selects an independent library. AUTEUR_DATA is the legacy name and still works.
+DATA_ENV = os.environ.get('LUMA_DATA') or os.environ.get('AUTEUR_DATA')
+DATA = Path(DATA_ENV) if DATA_ENV else ROOT/'data'
 MEDIA = DATA/'media'
 DB = DATA/'studio.sqlite'
 LOCK = threading.RLock()
 # An explicit data directory is a separate library and keeps its own Dify settings.
-DATA_ISOLATED = 'AUTEUR_DATA' in os.environ
+DATA_ISOLATED = DATA_ENV is not None
 
 def env_file():
     return DATA/'.env' if DATA_ISOLATED else ROOT/'.env'
@@ -1168,7 +1170,7 @@ def main():
     commands=parser.add_subparsers(dest='command')
     commands.add_parser('check',help='检查本机运行依赖')
     commands.add_parser('backup',help='将作品和素材备份到新目录').add_argument('destination',type=Path)
-    commands.add_parser('restore',help='从备份恢复到 AUTEUR_DATA 指定的新目录').add_argument('source',type=Path)
+    commands.add_parser('restore',help='从备份恢复到 LUMA_DATA 指定的新目录').add_argument('source',type=Path)
     options=parser.parse_args()
     try:
         if options.command=='backup':

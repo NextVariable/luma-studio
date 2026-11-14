@@ -21,7 +21,7 @@ tests/                       Python and JavaScript regression suites
 docs/                        Setup and operating notes
 ```
 
-The default library is `data/studio.sqlite` with files in `data/media/`. Set `AUTEUR_DATA` to use an independent library. In that mode the library has its own `.env`. Keep the server on loopback and run one process per library.
+The default library is `data/studio.sqlite` with files in `data/media/`. Set `LUMA_DATA` to use an independent library. In that mode the library has its own `.env`. Keep the server on loopback and run one process per library.
 
 ## Backup and restore · 备份和恢复
 
@@ -29,8 +29,8 @@ Stop the instance for the library before backing it up. Use new destination dire
 
 ```sh
 python3 -m luma backup ./luma-backup
-AUTEUR_DATA=./luma-restored python3 -m luma restore ./luma-backup
-AUTEUR_DATA=./luma-restored python3 -m luma
+LUMA_DATA=./luma-restored python3 -m luma restore ./luma-backup
+LUMA_DATA=./luma-restored python3 -m luma
 ```
 
 Backups contain the project database, media, and exported films. Restore verifies files, pauses external generation, and marks unfinished remote jobs for reconciliation. Provider credentials are configured separately.

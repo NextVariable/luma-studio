@@ -1,0 +1,25 @@
+[project]
+name = "luma-studio"
+version = "0.1.0.dev0"
+description = "Local-first production workspace for episodic motion comics"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+realtime = ["websocket-client==1.9.0"]
+
+[project.urls]
+Repository = "https://github.com/NextVariable/luma-studio"
+Issues = "https://github.com/NextVariable/luma-studio/issues"
+
+[tool.ruff]
+target-version = "py311"
+extend-exclude = ["research", "data", "media"]
+
+[tool.ruff.lint]
+# Errors and likely bugs only. The code base uses a compact style, so layout rules stay off.
+select = ["E9", "F", "B"]
+# Several zip() calls pair a list with its own tail on purpose, so strict= would change behavior.
+ignore = ["B905"]
