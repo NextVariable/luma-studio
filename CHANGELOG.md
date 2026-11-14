@@ -15,6 +15,7 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). I
 - Community files: code of conduct, feature request template, `.editorconfig` and Dependabot updates for GitHub Actions and pip.
 
 ### Changed
+- Dependabot updates for the CI actions and `websocket-client` 1.9.2 are merged. A test now fails when the `realtime` extra in `pyproject.toml` and `requirements-realtime.txt` disagree.
 - The library directory variable is now `LUMA_DATA`. `AUTEUR_DATA` still works.
 - The browser-to-server write header is now `X-Luma`, and the generated Dify workflows are titled "Luma" with `luma_*` structured-output schema names. Re-import the workflows into Dify to pick them up. A workflow you have already imported keeps working.
 - New Dify runs are started as user `luma-<project id>` and record it with the run. A run stored before this change has no recorded user, so it is recovered and approved as `auteur-<project id>`, which is what Dify has on file for it.
