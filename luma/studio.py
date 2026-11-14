@@ -1,5 +1,5 @@
 """Local-only studio: transactional project state, durable jobs and FFmpeg export."""
-import argparse, copy, json, os, shutil, sqlite3, sys, tempfile, uuid, time, threading, subprocess, mimetypes, hashlib
+import argparse, copy, json, os, re, shutil, sqlite3, sys, tempfile, uuid, time, threading, subprocess, mimetypes, hashlib
 from pathlib import Path
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, unquote
@@ -1065,6 +1065,28 @@ def worker():
     while True:
         if not work_once():time.sleep(.5)
 
+def byte_range(header, size):
+    """Resolve a single-range Range header against a file of `size` bytes.
+
+    Returns (start, end) inclusive, None to serve the whole file (no header, a form we do not
+    parse, or several ranges), or raises ValueError when the range cannot be satisfied (416).
+    """
+    match = re.fullmatch(r'bytes=(\d*)-(\d*)', (header or '').strip())
+    if not match or not (match.group(1) or match.group(2)):
+        return None
+    first, last = match.groups()
+    if not first:  # suffix form: the final N bytes
+        count = int(last)
+        if count == 0 or size == 0:
+            raise ValueError('无效媒体范围')
+        return max(size - count, 0), size - 1
+    start = int(first)
+    end = min(int(last), size - 1) if last else size - 1
+    if start >= size or start > end:
+        raise ValueError('无效媒体范围')
+    return start, end
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self,*args):pass
     def respond(self,data,status=200):
@@ -1089,10 +1111,9 @@ class Handler(BaseHTTPRequestHandler):
                 file=(ROOT/'web'/('index.html' if path=='/' else unquote(path.lstrip('/')))).resolve()
                 if not file.is_relative_to(ROOT/'web') or not file.is_file():return self.respond({'error':'不存在'},404)
             size=file.stat().st_size; start=0; end=size-1; status=200
-            range_header=self.headers.get('Range')
-            if range_header and range_header.startswith('bytes='):
-                part=range_header[6:].split('-'); start=int(part[0] or 0); end=min(int(part[1]) if part[1] else end,end); status=206
-                if start>end:return self.respond({'error':'无效媒体范围'},416)
+            try:requested=byte_range(self.headers.get('Range'),size)
+            except ValueError:return self.respond({'error':'无效媒体范围'},416)
+            if requested:start,end=requested;status=206
             self.send_response(status); self.send_header('Content-Type',mimetypes.guess_type(file)[0] or 'application/octet-stream'); self.send_header('Content-Length',str(end-start+1)); self.send_header('Accept-Ranges','bytes'); self.send_header('X-Content-Type-Options','nosniff'); self.send_header('Cache-Control','no-store')
             if status==206:self.send_header('Content-Range',f'bytes {start}-{end}/{size}')
             self.end_headers()

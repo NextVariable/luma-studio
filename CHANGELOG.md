@@ -26,6 +26,7 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). I
 - Disabled navigation items are more visible on the library home page.
 
 ### Fixed
+- Byte-range requests now follow RFC 7233 for a single range. `bytes=-N` returns the last N bytes instead of the first N+1, a malformed header is ignored instead of returning a Python exception message, and an unsatisfiable range returns 416.
 - Concurrent thumbnail requests no longer start parallel FFmpeg runs for the same file.
 - Discarding an upload matches whole file names, so `a.mp4` is no longer blocked by a job that mentions `final-a.mp4`.
 - Import previews list shot and asset names instead of raw JSON.
