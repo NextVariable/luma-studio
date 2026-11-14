@@ -36,7 +36,7 @@ class DifyBridgeTests(unittest.TestCase):
             result = Dify().run('shots', {'id':'p','script':'剧情','revision':1})
             body = json.loads(request.call_args.args[0].data)
             self.assertEqual(body['response_mode'], 'streaming')
-            self.assertEqual(body['user'], 'auteur-p')
+            self.assertEqual(body['user'], 'luma-p')
             return result
 
     def test_production_approved_output_is_decoded(self):
@@ -93,6 +93,36 @@ class DifyBridgeTests(unittest.TestCase):
         self.assertEqual(req.get_method(),'GET')
         self.assertIn('/workflow/remote-run/events?',req.full_url)
         self.assertIn('user=auteur-project1',req.full_url)
+
+    def test_runs_started_under_the_new_name_are_recovered_under_it(self):
+        finished={'event':'workflow_finished','workflow_run_id':'remote-run','data':{'status':'succeeded','outputs':{
+            'approved_end_result':{'status':'creative_approved','shots':[{'description':'镜头','duration':5}]}}}}
+        with patch.dict(os.environ,{'DIFY_PRODUCTION_KEY':'not-real'}),patch('luma.providers.open_request',return_value=stream(finished)) as request:
+            Dify().listen('shots',{'id':'project1','revision':1},{'run_id':'remote-run','user':'luma-project1'})
+        self.assertIn('user=luma-project1',request.call_args.args[0].full_url)
+
+    def test_runs_without_a_recorded_identity_are_recovered_under_the_old_name(self):
+        finished={'event':'workflow_finished','workflow_run_id':'remote-run','data':{'status':'succeeded','outputs':{
+            'approved_end_result':{'status':'creative_approved','shots':[{'description':'镜头','duration':5}]}}}}
+        with patch.dict(os.environ,{'DIFY_PRODUCTION_KEY':'not-real'}),patch('luma.providers.open_request',return_value=stream(finished)) as request:
+            Dify().listen('shots',{'id':'project1','revision':1},{'run_id':'remote-run'})
+        self.assertIn('user=auteur-project1',request.call_args.args[0].full_url)
+
+    def test_new_runs_record_the_identity_they_used(self):
+        result=self.run_stream({'event':'workflow_started','workflow_run_id':'run1','data':{}},
+                               {'event':'workflow_finished','workflow_run_id':'run1','data':{'status':'succeeded','outputs':{
+                                   'approved_end_result':{'status':'creative_approved','shots':[{'description':'镜头','duration':5}]}}}})
+        self.assertEqual(result['user'],'luma-p')
+
+    def test_approval_submit_for_an_old_run_keeps_the_old_identity(self):
+        with patch.dict(os.environ,{'DIFY_PRODUCTION_KEY':'not-real'}),patch('luma.providers.open_request',return_value=io.BytesIO(b'{}')) as request:
+            Dify().submit('shots',{'id':'project1'},{'form_token':'private-form'},'revise',{'notes':'x'})
+        self.assertEqual(json.loads(request.call_args.args[0].data)['user'],'auteur-project1')
+
+    def test_approval_submit_for_a_new_run_uses_the_recorded_identity(self):
+        with patch.dict(os.environ,{'DIFY_PRODUCTION_KEY':'not-real'}),patch('luma.providers.open_request',return_value=io.BytesIO(b'{}')) as request:
+            Dify().submit('shots',{'id':'project1'},{'form_token':'private-form','user':'luma-project1'},'revise',{'notes':'x'})
+        self.assertEqual(json.loads(request.call_args.args[0].data)['user'],'luma-project1')
 
     def test_approval_submit_uses_original_form_and_identity(self):
         with patch.dict(os.environ,{'DIFY_PRODUCTION_KEY':'not-real'}),patch('luma.providers.open_request',return_value=io.BytesIO(b'{}')) as request:

@@ -133,9 +133,9 @@ class ProductionTests(unittest.TestCase):
         d=Dify()
         with patch.object(d,'request',side_effect=request),patch.object(d,'consume',return_value={'state':'succeeded'}):
             d.run('video',snap,media_path=studio.media_path)
-        self.assertIn(('auteur-'+self.p['id']).encode(),calls[0][2])
+        self.assertIn(('luma-'+self.p['id']).encode(),calls[0][2])
         body=calls[1][2]
-        self.assertEqual(body['user'],'auteur-'+self.p['id'])
+        self.assertEqual(body['user'],'luma-'+self.p['id'])
         self.assertEqual(body['inputs']['reference_files'],[{'type':'image','transfer_method':'local_file','upload_file_id':'uploaded'}])
         self.assertEqual(json.loads(body['inputs']['context'])['reference_media'][0]['role'],'start_frame')
 

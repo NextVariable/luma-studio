@@ -57,6 +57,11 @@ def encode_context(context):
     return encoded
 
 
+# Dify scopes a run, its event stream and its approval form to the `user` it was started with.
+# New runs use luma-<project>; a run stored before the rename has no recorded user and keeps auteur-<project>.
+def dify_user(context, previous=None):
+    return (previous or {}).get('user') or 'auteur-' + context['id']
+
 class Dify:
     def inspect_connection(self, kind):
         """Read app metadata only. Never starts a workflow or consumes an allowance."""
@@ -121,19 +126,19 @@ class Dify:
         return {'type':category,'transfer_method':'local_file','upload_file_id':result['id']}
 
     def run(self, kind, context, on_progress=None, media_path=None):
-        body={'inputs':{'context':encode_context(context)},'response_mode':'streaming','user':'auteur-'+context['id']}
+        body={'inputs':{'context':encode_context(context)},'response_mode':'streaming','user':'luma-'+context['id']}
         if kind in ('image','video','audio'):
             refs=context.get('reference_media',[])
             if len(refs)>10:raise ValueError('单次生成最多使用 10 个参考素材')
             if refs and media_path is None:raise ValueError('参考素材读取器未配置，拒绝丢失参考继续生成')
             body['inputs']['reference_files']=[self.upload_reference(kind,body['user'],media_path(r['file'])) for r in refs]
         with self.request(kind,'/workflows/run',body) as response:
-            return self.consume(response,kind,context,on_progress)
+            return self.consume(response,kind,context,on_progress,{'user':body['user']})
 
     def listen(self, kind, context, previous, on_progress=None):
         run=previous.get('run_id')
         if not run: raise ValueError('没有远程运行编号，不能核实；请在 Dify 日志检查，不自动重发')
-        query=urlencode({'user':'auteur-'+context['id'],'include_state_snapshot':'true'})
+        query=urlencode({'user':dify_user(context,previous),'include_state_snapshot':'true'})
         previous={k:v for k,v in previous.items() if k not in ('form_token','form','review_id')}
         with self.request(kind,'/workflow/'+quote(run,safe='')+'/events?'+query) as response:
             return self.consume(response,kind,context,on_progress,previous)
@@ -142,7 +147,7 @@ class Dify:
         token=previous.get('form_token')
         if not token: raise ValueError('此审批没有可用表单，请在 Dify 内处理后核实状态')
         with self.request(kind,'/form/human_input/'+quote(token,safe=''),
-                          {'action':action,'inputs':inputs,'user':'auteur-'+context['id']}):
+                          {'action':action,'inputs':inputs,'user':dify_user(context,previous)}):
             # HTTP success accepts this one-shot form; an empty body must not reopen it.
             pass
 
@@ -162,7 +167,7 @@ class Dify:
                 if name=='human_input_required':
                     token=data.get('form_token'); result['form_token']=token
                     if token:
-                        with self.request(kind,'/form/human_input/'+quote(token,safe='')+'?'+urlencode({'user':'auteur-'+context['id']})) as form_response:
+                        with self.request(kind,'/form/human_input/'+quote(token,safe='')+'?'+urlencode({'user':dify_user(context,result)})) as form_response:
                             result['form']=json.load(form_response)
                         result['review_id']=hashlib.sha256(token.encode()).hexdigest()
                     else:
