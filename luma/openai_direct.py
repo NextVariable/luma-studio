@@ -17,6 +17,13 @@ from urllib.parse import urlencode
 from .contracts import validate
 from .providers import UncertainRun, encode_context, open_request
 
+try:
+    from websocket import WebSocketException
+except ImportError:
+    REALTIME_IO_ERRORS = (OSError,)
+else:
+    REALTIME_IO_ERRORS = (OSError, WebSocketException)
+
 BASE = 'https://api.openai.com/v1'
 MODELS = {'audio': 'gpt-realtime-2.1-mini', 'revision': 'gpt-5.4-mini'}
 FIELDS = ('description', 'duration', 'framing', 'camera', 'dialogue', 'asset_ids')
@@ -69,7 +76,7 @@ def check_voice(voice):
 
 def open_realtime(credential):
     try:
-        from websocket import create_connection, WebSocketException
+        from websocket import create_connection
     except ImportError:
         raise ValueError('OpenAI 直连配音需要安装 requirements-realtime.txt 中的 WebSocket 依赖') from None
     try:
@@ -77,14 +84,15 @@ def open_realtime(credential):
                                  header={'Authorization':'Bearer '+credential},
                                  timeout=120, redirect_limit=0,
                                  sslopt={'context':ssl.create_default_context()})
-    except (WebSocketException,OSError):
+    except REALTIME_IO_ERRORS:
         raise ValueError('无法连接 OpenAI 实时配音服务，未提交配音请求') from None
 
 
 def send_event(socket,event,paid=False):
+    message = json.dumps(event, ensure_ascii=False)
     try:
-        socket.send(json.dumps(event,ensure_ascii=False))
-    except Exception:
+        socket.send(message)
+    except REALTIME_IO_ERRORS:
         if paid:raise UncertainRun('配音提交结果待核实，未自动重试') from None
         raise ValueError('配音服务未能完成连接设置，未提交配音请求') from None
 
@@ -95,7 +103,7 @@ def realtime_events(socket,paid=False):
         try:
             raw=socket.recv()
             if not raw:raise OSError('closed')
-        except Exception:
+        except (*REALTIME_IO_ERRORS, StopIteration):
             break
         try:
             event=json.loads(raw)

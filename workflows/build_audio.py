@@ -4,6 +4,7 @@ No model invocation. Supports per-character preset voices and one line per reque
 """
 import copy
 import json
+from itertools import pairwise
 from pathlib import Path
 
 ROOT = Path(__file__).parent
@@ -77,7 +78,7 @@ def build():
     edges = [{'id': a['id']+'-'+b['id'], 'source': a['id'], 'target': b['id'],
               'sourceHandle': 'source', 'targetHandle': 'target', 'type': 'custom', 'zIndex': 0,
               'data': {'sourceType': a['data']['type'], 'targetType': b['data']['type'], 'isInIteration': False, 'isInLoop': False}}
-             for a,b in zip(nodes, nodes[1:])]
+             for a,b in pairwise(nodes)]
     sample['workflow']['graph'] = {'nodes': nodes, 'edges': edges, 'viewport': {'x': 0, 'y': 0, 'zoom': .65}}
     return sample
 

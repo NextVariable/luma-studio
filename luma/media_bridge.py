@@ -16,14 +16,12 @@ def receive(url, kind, folder):
     if not addresses or any(not ipaddress.ip_address(a).is_global for a in addresses):raise ValueError('拒绝下载内网或本机地址')
     # Pin validated address; preserve TLS hostname validation and reject redirects.
     conn=http.client.HTTPSConnection(p.hostname,timeout=60,context=ssl.create_default_context())
-    raw=socket.create_connection((sorted(addresses)[0],443),timeout=60)
-    try:conn.sock=conn._context.wrap_socket(raw,server_hostname=p.hostname)
-    except Exception:
-        raw.close();raise
     ext={'image':'.png','video':'.mp4','audio':'.wav'}[kind]
     dest=folder/(uuid.uuid4().hex+ext)
     normalized=None;complete=False
     try:
+        with socket.create_connection((sorted(addresses)[0], 443), timeout=60) as raw:
+            conn.sock = conn._context.wrap_socket(raw, server_hostname=p.hostname)
         conn.request('GET',(p.path or '/')+('?' + p.query if p.query else ''))
         r=conn.getresponse()
         if r.status!=200:raise ValueError('素材下载失败；保留远程结果，不重新生成')

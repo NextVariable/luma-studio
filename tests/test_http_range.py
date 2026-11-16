@@ -8,6 +8,7 @@ import json
 import tempfile
 import threading
 import unittest
+from contextlib import closing
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
@@ -48,6 +49,13 @@ class RangeTests(unittest.TestCase):
         result = (response.status, body, response.getheader('Content-Range'), response.getheader('Content-Length'))
         conn.close()
         return result
+
+    def test_post_requires_a_json_object(self):
+        with closing(http.client.HTTPConnection('127.0.0.1', self.port, timeout=5)) as conn:
+            conn.request('POST', '/api/import/drama/preview', body='[]', headers={'X-Luma': 'studio'})
+            response = conn.getresponse()
+            self.assertEqual(response.status, 400)
+            self.assertEqual(json.loads(response.read()), {'error': '请求内容必须是 JSON 对象'})
 
     def test_no_range_returns_the_whole_file(self):
         status, body, content_range, _ = self.get()

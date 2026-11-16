@@ -1,5 +1,6 @@
 """Generate JSON-form YAML (YAML 1.2 subset); no secrets in DSL."""
 import json
+from itertools import pairwise
 from pathlib import Path
 root=Path(__file__).parent
 roles={
@@ -15,6 +16,6 @@ for kind,(label,instruction) in roles.items():
  {'id':'validate','type':'custom','position':{'x':660,'y':220},'data':{'type':'code','title':'JSON 基础校验','desc':'应用后端还会做引用与字段校验','selected':False,'code_language':'python3','variables':[{'variable':'text','value_selector':['reason','text']}],'code':'import json\ndef main(text: str) -> dict:\n    data = json.loads(text)\n    assert isinstance(data, dict), "Object required"\n    return {"result": data}','outputs':{'result':{'type':'object','children':None}}}},
  {'id':'end','type':'custom','position':{'x':960,'y':220},'data':{'type':'end','title':'输出建议','desc':'','selected':False,'outputs':[{'variable':'result','value_selector':['validate','result']}]}}]
  edges=[]
- for a,b in zip(nodes,nodes[1:]):edges.append({'id':a['id']+'-'+b['id'],'type':'custom','source':a['id'],'target':b['id'],'sourceHandle':'source','targetHandle':'target','data':{'sourceType':a['data']['type'],'targetType':b['data']['type'],'isInIteration':False,'isInLoop':False}})
+ for a,b in pairwise(nodes):edges.append({'id':a['id']+'-'+b['id'],'type':'custom','source':a['id'],'target':b['id'],'sourceHandle':'source','targetHandle':'target','data':{'sourceType':a['data']['type'],'targetType':b['data']['type'],'isInIteration':False,'isInLoop':False}})
  d={'version':'0.3.0','kind':'app','app':{'name':'Luma · '+label,'mode':'workflow','icon':'🎬','icon_background':'#E4EDFB','description':'独立2.0制作工作流；输出需由 Luma 校验并人工采纳','use_icon_as_answer_icon':False},'dependencies':[],'workflow':{'conversation_variables':[],'environment_variables':[],'features':{'file_upload':{'enabled':False},'opening_statement':'','retriever_resource':{'enabled':False},'sensitive_word_avoidance':{'enabled':False},'speech_to_text':{'enabled':False},'suggested_questions':[],'suggested_questions_after_answer':{'enabled':False},'text_to_speech':{'enabled':False}},'graph':{'nodes':nodes,'edges':edges,'viewport':{'x':0,'y':0,'zoom':.7}}}}
  (root/'smoke'/(kind+'.yml')).write_text(json.dumps(d,ensure_ascii=False,indent=2))

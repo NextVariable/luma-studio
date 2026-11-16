@@ -927,7 +927,7 @@ def render_export(snapshot,jid,folder):
             # One cue per line, timed by text length inside the shot (an estimate, not speech alignment).
             texts=[production.dialogue_text(snapshot,[l]) for l in s['lines']]
             times=[(x['start'],x['end']) for x in schedule] if schedule else production.line_timings(s['lines'],s['duration'])
-            for (a,b),text in zip(times,texts):
+            for (a,b),text in zip(times, texts, strict=True):
                 captions.append(f'{len(captions)+1}\n{stamp(cursor+a)} --> {stamp(cursor+b)}\n{text}\n')
         elif s.get('dialogue'): captions.append(f'{len(captions)+1}\n{stamp(cursor)} --> {stamp(cursor+s["duration"])}\n{s["dialogue"]}\n')
         cursor+=s['duration']
@@ -1127,7 +1127,12 @@ class Handler(BaseHTTPRequestHandler):
                     if not chunk:break
                     self.wfile.write(chunk); remaining-=len(chunk)
         except (BrokenPipeError,ConnectionResetError):pass
-        except Exception as e:self.respond({'error':str(e)},400)
+        except FileNotFoundError:
+            self.respond({'error':'文件不存在'},404)
+        except ValueError as error:
+            self.respond({'error':str(error)},400)
+        except (OSError, sqlite3.Error, subprocess.SubprocessError):
+            self.respond({'error':'暂时无法读取作品或媒体'},500)
     def do_POST(self):
         try:
             if self.headers.get('Host','').split(':')[0] not in ('127.0.0.1','localhost'):return self.respond({'error':'仅允许本机访问'},403)
@@ -1136,6 +1141,7 @@ class Handler(BaseHTTPRequestHandler):
             origin=self.headers.get('Origin')
             if origin and origin!=f'http://{self.headers.get("Host")}':return self.respond({'error':'来源无效'},403)
             path=urlparse(self.path).path; length=int(self.headers.get('Content-Length','0'))
+            if length < 0:raise ValueError('请求长度无效')
             if length>200*1024*1024:raise ValueError('单次上传限 200 MB')
             if path.startswith('/api/upload/') and path!='/api/upload/discard':
                 ext=path.rsplit('/',1)[1]
@@ -1144,11 +1150,12 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     info=json.loads(subprocess.check_output(['ffprobe','-v','error','-show_streams','-of','json',str(dest)],timeout=30))
                     if not info.get('streams'):raise ValueError('媒体无有效轨道')
-                except Exception as err:
+                except (OSError, ValueError, subprocess.SubprocessError) as err:
                     dest.unlink(missing_ok=True); raise ValueError('媒体格式验证失败') from err
                 return self.respond({'file':name,'streams':[s['codec_type'] for s in info['streams']]})
             if length>2*1024*1024:raise ValueError('请求过大')
             body=json.loads(self.rfile.read(length) or '{}')
+            if not isinstance(body, dict):raise ValueError('请求内容必须是 JSON 对象')
             if path=='/api/upload/discard':return self.respond(discard_upload(body.get('file')))
             if path=='/api/preparation/initialize':return self.respond(initialize_preparation(body['project_id'],body['revision'],body.get('episode_id')))
             if path=='/api/preparation/open':return self.respond(open_preparation(body['project_id'],body['shot_id'],body.get('kind','video')))
@@ -1180,7 +1187,14 @@ class Handler(BaseHTTPRequestHandler):
                 with connect() as c:c.execute("UPDATE jobs SET state='cancelled',updated=? WHERE id=? AND state IN ('queued','running','waiting_review')",(time.time(),body['id']))
                 return self.respond({'ok':True})
             return self.respond({'error':'接口不存在'},404)
-        except Exception as e:self.respond({'error':str(e)},400)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        except KeyError:
+            self.respond({'error':'请求缺少必要字段'},400)
+        except ValueError as error:
+            self.respond({'error':str(error)},400)
+        except (OSError, sqlite3.Error, subprocess.SubprocessError):
+            self.respond({'error':'暂时无法保存或处理请求'},500)
 
 def load_env():
     p=env_file()
