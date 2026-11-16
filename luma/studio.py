@@ -285,7 +285,10 @@ def confirm_continuity(pid,episode_id,expected,preview_digest,resolution,reason)
 
 def preview_drama_import(bundle):
     from .drama_import import convert
-    preview=convert(bundle)
+    try:
+        preview=convert(bundle)
+    except (KeyError, TypeError, IndexError) as exc:
+        raise ValueError('短剧包字段缺失或格式不正确，请检查来源文件后重新导入') from exc
     validate_project(preview['project']);production.validate(preview['project'],media_path)
     token=uid();digest=production.digest(preview)
     # Keep source and converted facts together; the confirmation never rereads mutable desktop files.
@@ -911,11 +914,11 @@ def render_export(snapshot,jid,folder):
             args+=['-filter_complex',';'.join(graph)];audio='[dialogue]'
         elif s.get('audio'):
             audio_path=media_path(s['audio'])
-            info=json.loads(subprocess.check_output(['ffprobe','-v','error','-show_format','-of','json',str(audio_path)]))
+            info=json.loads(subprocess.check_output(['ffprobe','-v','error','-show_format','-of','json',str(audio_path)],timeout=30))
             if float(info['format']['duration'])>s['duration']+.15:raise ValueError('对白音轨超过镜头时长，请先延长镜头或调整配音，避免截断台词')
             args+=['-i',str(audio_path)]; audio='1:a:0'
         else:
-            probe=json.loads(subprocess.check_output(['ffprobe','-v','error','-show_streams','-of','json',str(src)]))
+            probe=json.loads(subprocess.check_output(['ffprobe','-v','error','-show_streams','-of','json',str(src)],timeout=30))
             if any(x['codec_type']=='audio' for x in probe['streams']): audio='0:a:0'
             else: args+=['-f','lavfi','-i','anullsrc=r=48000:cl=stereo']; audio='1:a:0'
         args+=['-map','0:v:0','-map',audio,'-vf',f'scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=24,tpad=stop_mode=clone:stop_duration=60',*(['-af','apad'] if not schedule else []),'-t',str(s['duration']),'-c:v','libx264','-preset','fast','-pix_fmt','yuv420p','-c:a','aac','-ar','48000','-ac','2',str(out)]
@@ -937,7 +940,7 @@ def render_export(snapshot,jid,folder):
     ffmpeg(args+['-movflags','+faststart',str(dest)])
     proof={'project_id':snapshot['id'],'episode_id':snapshot.get('episode_id'),'revision':snapshot['revision'],'shots':snapshot['shots'],'clips':clips,'creative_brief':snapshot.get('creative_brief'),'duration':cursor,'output':dest.name,'delivery_basis':production.delivery_basis(snapshot),'review_basis':production.review_basis(snapshot),**({'assembly':snapshot['assembly']} if snapshot.get('assembly') else {})}
     proof_file=folder/(jid+'.json');proof_file.write_text(json.dumps(proof,ensure_ascii=False,indent=2))
-    probe=json.loads(subprocess.check_output(['ffprobe','-v','error','-show_format','-show_streams','-of','json',str(dest)]))
+    probe=json.loads(subprocess.check_output(['ffprobe','-v','error','-show_format','-show_streams','-of','json',str(dest)],timeout=30))
     if abs(float(probe['format']['duration'])-cursor)>.2:raise ValueError('成片时长验证失败')
     subprocess.run(['ffmpeg','-v','error','-xerror','-i',str(dest),'-f','null','-'],check=True,capture_output=True,timeout=240)
     proof_file.replace(MEDIA/proof_file.name)

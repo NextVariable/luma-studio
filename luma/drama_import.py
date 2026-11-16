@@ -30,8 +30,18 @@ def convert(bundle):
     files = copy.deepcopy(bundle['files'])
     for key in ('project.json', 'characters.json', 'assets.json', 'outfits.json', 'episode-state.json'):
         if not isinstance(files.get(key), dict): raise ValueError('缺少来源文件：' + key)
-    bible = files['project.json']; chars = files['characters.json']['characters']; other = files['assets.json']['assets']
-    outfits = files['outfits.json']; state = files['episode-state.json']['episodes']
+    for filename, field in (('characters.json', 'characters'), ('assets.json', 'assets'),
+                            ('outfits.json', 'outfits'), ('episode-state.json', 'episodes')):
+        value = files[filename].get(field)
+        if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
+            raise ValueError(f'{filename} 的 {field} 需要是对象列表，请重新导出短剧包')
+    bible = files['project.json']
+    if not isinstance(bible.get('title'), str) or not bible['title'].strip():
+        raise ValueError('project.json 缺少项目标题，请重新导出短剧包')
+    chars = files['characters.json']['characters']
+    other = files['assets.json']['assets']
+    outfits = files['outfits.json']
+    state = files['episode-state.json']['episodes']
     digest = production.digest(bundle)
     pid = 'drama-' + digest[:24]
     p = {'id': pid, 'title': bible['title'], 'script': '', 'revision': 0, 'mode': 'director', 'assets': [], 'shots': [], 'episodes': [],

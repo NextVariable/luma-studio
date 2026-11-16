@@ -91,7 +91,8 @@ class ProductionTests(unittest.TestCase):
 
     def test_revision_workflow_hard_gate_rejects_multiple_shots(self):
         from pathlib import Path
-        graph=json.loads((Path(studio.ROOT)/'workflows/production/shot-revision.yml').read_text())['workflow']['graph']
+        workflow_path = Path(__file__).resolve().parents[1] / 'workflows/production/shot-revision.yml'
+        graph = json.loads(workflow_path.read_text())['workflow']['graph']
         code=next(n['data']['code'] for n in graph['nodes'] if n['id']=='check');env={};exec(code,env)
         r=env['main'](json.dumps({'shots':[{},{}]}),json.dumps({'passed':True}),{'assets':[],'revision':1})
         self.assertEqual(r['ok'],0);self.assertEqual(r['result']['status'],'blocked')

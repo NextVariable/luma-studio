@@ -50,6 +50,13 @@ class DramaImportTests(unittest.TestCase):
             self.assertEqual(c.execute('select count(*) from projects').fetchone()[0], 1)
             self.assertEqual(c.execute('select count(*) from jobs').fetchone()[0], 0)
 
+    def test_malformed_character_data_has_a_readable_import_error(self):
+        for bad in ({}, {"characters": ["invalid"]}):
+            sample = bundle()
+            sample["files"]["characters.json"] = bad
+            with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, r"characters.json.*重新导出"):
+                studio.preview_drama_import(sample)
+
     def test_import_preserves_ids_facts_dialogue_and_explicit_outfit(self):
         p = self.imported(); s = p['shots'][0]
         self.assertEqual((len(p['episodes']), s['id'], s['asset_bindings']['hero']), (2, 'EP001-S1', 'coat'))
