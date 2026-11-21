@@ -51,8 +51,9 @@ def create(media, save):
             camera = blocking.preset(('wide','left','right')[i-1])
             plate = media / (pid + f'-platform-{i}.png')
             copied.append(plate)
-            plate.write_bytes(blocking.render(camera, actors))
-            shot['composition_reference'] = dict(actors=actors, camera=camera, file=plate.name)
+            plate.write_bytes(blocking.render(camera, actors, framing=shot['framing']))
+            shot['composition_reference'] = dict(actors=actors, camera=camera, file=plate.name,
+                                                 spec=blocking.composition_spec(camera['view'], shot['framing'], False))
             if i == 2:
                 production.add_take(shot, 'image', install('frame-4.jpg').name, '备选 · 阿远近景')
             audio = install(f'line-{"abc"[i-1]}.wav')

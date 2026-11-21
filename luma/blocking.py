@@ -46,7 +46,15 @@ def current_camera(shot, actors):
     return preset("left" if speaker == actors[0]["id"] else "right")
 
 
-def render(camera, actors, portrait=False):
+def visible_slots(view):
+    return {"wide": (0, 1), "left": (0,), "right": (1,)}[view]
+
+
+def composition_spec(view, framing, portrait):
+    return dict(version=2, view=view, framing=framing or '中景', portrait=portrait)
+
+
+def render(camera, actors, portrait=False, framing='中景'):
     if not isinstance(camera, dict) or camera.get("view") not in PRESETS:
         raise ValueError("请选择有效机位")
     for key, lo, hi in [("angle", -55, 55), ("distance", 1.8, 10)]:
@@ -63,6 +71,12 @@ def render(camera, actors, portrait=False):
         camera["view"]
     ]
     aim_y = 1.0 if wide else 1.46
+    zoom = 1.0
+    center_x = w / 2
+    if not wide:
+        zoom, aim_y = {"中近景": (1.25, 1.47), "近景": (1.5, 1.53),
+                       "特写": (2, 1.62), "大特写": (2.5, 1.68)}.get(framing, (1, 1.36))
+        center_x = w * (0.42 if camera["view"] == "left" else 0.58)
     yaw = math.radians(camera["angle"])
     co, si = math.cos(yaw), math.sin(yaw)
 
@@ -84,8 +98,8 @@ def render(camera, actors, portrait=False):
                 clipped.append(b)
         if len(clipped) < 3:
             return
-        scale = w * 0.98 if wide else min(w, h * 1.78) * 1.25
-        pts = [(w / 2 + scale * x / z, h / 2 - scale * y / z) for x, y, z in clipped]
+        scale = w * 0.98 if wide else min(w, h * 1.78) * 1.25 * zoom
+        pts = [(center_x + scale * x / z, h / 2 - scale * y / z) for x, y, z in clipped]
         edges = list(zip(pts[-1:] + pts[:-1], pts))
         rgb = bytes.fromhex(color)
         for y in range(
@@ -107,7 +121,7 @@ def render(camera, actors, portrait=False):
     # A neutral floor conveys depth without supplying an unintended story location.
     polygon([(-40, 0, -14), (40, 0, -14), (40, 0, 15), (-40, 0, 15)], "425462")
     for n in sorted(
-        range(2), key=lambda i: -transform((actors[i]["x"], 1, actors[i]["z"]))[2]
+        visible_slots(camera["view"]), key=lambda i: -transform((actors[i]["x"], 1, actors[i]["z"]))[2]
     ):
         x, z = actors[n]["x"], actors[n]["z"]
         sign = 1 if n == 0 else -1

@@ -95,3 +95,78 @@ class StoryboardImageTests(TestCase):
                                          [name + ' · 角色参考' for name in names] + ['机位构图'])
                         self.assertEqual(q['references'][-1]['file'], shot['composition_reference']['file'])
             self.assertEqual(studio.spending()['used'], 0)
+
+    def test_cut_and_reverse_preserve_versions_and_offscreen_cast(self):
+        from copy import deepcopy
+        from luma import blocking
+        with TemporaryDirectory() as tmp, patch.multiple(
+                studio, DATA=Path(tmp), MEDIA=Path(tmp)/'media', DB=Path(tmp)/'studio.sqlite'
+        ), patch('socket.socket.connect', side_effect=AssertionError('unexpected network')):
+            studio.init()
+            p = sample_scene.create(studio.MEDIA, studio.save)
+            s = p['shots'][1]
+            before = deepcopy(s)
+            old_plate = studio.media_path(s['composition_reference']['file'])
+            original_bytes = old_plate.read_bytes()
+            actors = blocking.layout(p, s)
+            # Stable IDs need not resemble the displayed names or outfit labels.
+            for i, asset in enumerate(p['assets'][:2]):
+                asset['name'] = f'演员{i}'
+                asset['versions'][0]['name'] = f'演员{i}'
+                asset['versions'].append(dict(asset['versions'][0], id=f'new-{i}', outfit='未绑定的新衣'))
+                asset['selected_version'] = f'new-{i}'
+            s['composition_reference']['actors'] = blocking.layout(p, s)
+            for view, slots, framing, direction in [('wide',(0,1),'全景',None), ('left',(0,),'中景','右'),
+                                                    ('right',(1,),'近景','左')]:
+                s['framing'] = framing
+                camera = blocking.preset(view)
+                plate = studio.MEDIA / (view + '.png')
+                plate.write_bytes(blocking.render(camera, actors, framing=framing))
+                s['composition_reference'].update(camera=camera, file=plate.name,
+                    spec=blocking.composition_spec(view, framing, False))
+                packet = studio.storyboard_packet(p, s['id'], domestic_media.FLASH)
+                refs = packet['references']
+                visible = [actors[i]['id'] for i in slots]
+                self.assertEqual(packet['staging']['visible_ids'], visible)
+                self.assertEqual(packet['staging']['offscreen_ids'], [a['id'] for a in actors if a['id'] not in visible])
+                self.assertEqual([r['asset_id'] for r in refs[:-1]], visible)
+                self.assertEqual([r['version_id'] for r in refs[:-1]], [before['asset_bindings'][aid] for aid in visible])
+                body = domestic_media.arguments('image', {'generation_segment':packet}, studio.media_path)
+                self.assertEqual([base64.b64decode(uri.split(',')[1]) for uri in body['image']],
+                                 [studio.media_path(p['assets'][i]['versions'][0]['file']).read_bytes()
+                                  for i in slots] + [plate.read_bytes()])
+                if direction:
+                    self.assertIn('单人'+framing, body['prompt'])
+                    self.assertIn('看向画'+direction+'外', body['prompt'])
+                    self.assertIn('画内恰好一人', body['prompt'])
+                self.assertNotIn('未绑定的新衣', body['prompt'])
+            s['composition_reference'].pop('spec')
+            with self.assertRaisesRegex(ValueError,'重新保存'):
+                studio.storyboard_packet(p, s['id'])
+            self.assertEqual(s['asset_bindings'],before['asset_bindings'])
+            self.assertEqual(s['takes'],before['takes'])
+            self.assertEqual(old_plate.read_bytes(),original_bytes)
+
+    def test_single_camera_pixels_exclude_partner_even_at_max_distance(self):
+        import struct
+        import zlib
+        from luma import blocking
+        actors = [dict(x=x, z=z) for x,z in blocking.POSITIONS]
+        def center(pixels, color):
+            stride = 1 + 960 * 3
+            rgb = bytes.fromhex(color)
+            xs = [x for y in range(540) for x in range(960)
+                  if pixels[y*stride+1+3*x:y*stride+4+3*x] == rgb]
+            return sum(xs)/len(xs)
+
+        for view, visible in [('wide',(True,True)),('left',(True,False)),('right',(False,True))]:
+            camera = dict(blocking.preset(view),distance=10)
+            png = blocking.render(camera, actors)
+            i = png.index(b'IDAT')
+            size = struct.unpack('>I',png[i-4:i])[0]
+            pixels = zlib.decompress(png[i+4:i+4+size])
+            for color, expected in zip(('548999','bb7952'), visible):
+                self.assertEqual(bytes.fromhex(color) in pixels, expected)
+            if view != 'wide':
+                self.assertNotEqual(png, blocking.render(camera,actors,framing='近景'))
+                self.assertEqual(center(pixels, '443c40') > center(pixels, '252f39'), view=='left')

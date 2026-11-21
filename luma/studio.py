@@ -474,13 +474,16 @@ def shot_camera(body, apply=False):
     shot=preparation.shot_of(p,body['shot_id'])
     actors=blocking.layout(p,shot)
     camera=body.get('camera',blocking.current_camera(shot,actors))
-    image=blocking.render(camera,actors,p['creative_brief']['format']=='9:16')
+    portrait = p['creative_brief']['format'] == '9:16'
+    framing = shot.get('framing') or '中景'
+    image=blocking.render(camera, actors, portrait, framing)
     if not apply:
         return {'actors':actors,'camera':camera,'image':blocking.preview(image),
                 'presets':{name:blocking.preset(name) for name in blocking.PRESETS}}
     filename=uid()+'.png'
     if shot.get('locked'):raise ValueError('请先解除镜头锁定')
-    shot['composition_reference']={'actors':actors,'camera':camera,'file':filename}
+    shot['composition_reference']={'actors':actors,'camera':camera,'file':filename,
+                                   'spec':blocking.composition_spec(camera['view'], framing, portrait)}
     path=MEDIA/filename
     try:
         path.write_bytes(image)
@@ -618,7 +621,12 @@ def storyboard_packet(p,sid,model=fal_media.STORYBOARD):
     view=ref['camera']['view']
     if view not in blocking.PRESETS:
         raise ValueError('机位无效，请重新保存构图')
-    actors = ref['actors'] if view == 'wide' else [ref['actors'][0 if view == 'left' else 1]]
+    framing = s.get('framing') or '中景'
+    if view != 'wide' and ref.get('spec') != blocking.composition_spec(view, framing, p['creative_brief']['format'] == '9:16'):
+        raise ValueError('请打开机位并重新保存单人构图，以匹配当前景别与画幅')
+    slots = blocking.visible_slots(view)
+    actors = [ref['actors'][slot] for slot in slots]
+    offscreen = [actor for slot, actor in enumerate(ref['actors']) if slot not in slots]
     assets = {a['id']: a for a in p['assets']}
     bindings = s['asset_bindings']
     versions = []
@@ -639,6 +647,12 @@ def storyboard_packet(p,sid,model=fal_media.STORYBOARD):
         refs.append(dict(role=role, file=file, label=label,
                          reference_id=hashlib.sha256(path.read_bytes()).hexdigest()))
 
+    if view == 'wide':
+        instructions.append('双人全景，恰好两人同框，左右位置与视线按构图保持。')
+    else:
+        direction = '右' if view == 'left' else '左'
+        instructions.append(f"单人{framing}，画内恰好一人。主体面朝画{direction}，看向画{direction}外的对手。"
+                            "仅拍主体，画面边缘、前景、背景及倒影均无第二人或其身体局部。")
     for index, actor in enumerate(actors, 1):
         version = bound_version(assets[actor['id']])
         views = version.get('views') or {}
@@ -647,8 +661,9 @@ def storyboard_packet(p,sid,model=fal_media.STORYBOARD):
         if not portrait:
             raise ValueError(f'请为{name}当前绑定的造型添加角色参考图')
         add_reference('character', portrait, name + ' · 角色参考')
+        refs[-1].update(asset_id=actor['id'], version_id=version['id'])
         position = ('左侧' if index == 1 else '右侧') if view == 'wide' else '主体'
-        instructions.append(f"图{index}用于{position}人物{name}的面貌与衣着。造型：{version.get('description','')}。")
+        instructions.append(f"图{index}用于{position}人物{name}的面貌与衣着。保持参考图的脸型、发型、发色和服装颜色。造型：{version.get('description','')}。服装：{version.get('outfit') or '以角色图为准'}。")
 
     location = (s.get('creative_spec') or {}).get('locationId')
     scenes = [assets[k] for k in s['asset_ids'] if assets[k]['kind'] == 'scene' and (not location or k == location)]
@@ -660,11 +675,16 @@ def storyboard_packet(p,sid,model=fal_media.STORYBOARD):
     add_reference('composition', ref['file'], '机位构图')
     instructions.append(f"图{len(refs)}仅用于人物站位、视线、景别和机位。背景依照镜头与场景设定绘制。"
                         f"镜头：{s['description']}。画风：{p['creative_brief']['style']}。")
+    if offscreen:
+        instructions.append(f"动作描述中提到的{offscreen[0]['name']}始终在画外，不入镜。")
+    instructions.append('保持本场既定空间、主光方向和人物相对位置；角色外观只取自角色参考图。')
+    staging = dict(visible_ids=[actor['id'] for actor in actors],
+                   offscreen_ids=[actor['id'] for actor in offscreen], view=view)
     prompt = ''.join(instructions)
     return dict(id='storyboard-'+sid,shot_id=sid,start=0,end=s['duration'],duration=s['duration'],
                 kind='image',mode='storyboard',provider=domestic_media.PROVIDER.get(model, 'fal'),model=model,
                 references=refs,parameters={'aspect_ratio':p['creative_brief']['format']},
-                instruction=prompt,plan_digest=production.digest([refs,prompt,versions,ref['camera']]))
+                instruction=prompt,staging=staging,plan_digest=production.digest([refs,prompt,versions,ref['camera'],staging]))
 
 
 def job_request(pid,kind,payload,*,quoting=False):
