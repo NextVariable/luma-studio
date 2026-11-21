@@ -650,3 +650,27 @@ def select_take(s, tid):
 def check_full_take(s,t):
     segment=t.get('generation_segment')
     if segment and (segment['start']!=0 or abs(segment['end']-s['duration'])>.001):raise ValueError('这是局部生成片段，需合成完整镜头后再选用，不能直接替代整镜')
+
+
+def rehearsal(project, episode_id):
+    """Use the current cut, including incomplete shots, without creating an export job."""
+    if not any(e['id'] == episode_id for e in project['episodes']):
+        raise ValueError('剧集不存在')
+    rows = []
+    for shot in (s for s in project['shots'] if s['episode_id'] == episode_id):
+        lines = shot.get('lines') or []
+        try:
+            audio = audio_schedule(shot)
+        except ValueError:
+            # An incomplete or overlapping mix can still be rehearsed with subtitles.
+            audio = []
+        timing = [(item['start'], item['end']) for item in audio] or line_timings(lines, shot['duration'])
+        captions = [{'start': start, 'end': end, 'text': dialogue_text(project, [line])}
+                    for line, (start, end) in zip(lines, timing)]
+        if not lines and shot.get('dialogue'):
+            captions.append({'start': 0, 'end': shot['duration'], 'text': shot['dialogue']})
+        if not audio and shot.get('audio'):
+            audio = [{'file': shot['audio'], 'start': 0, 'end': shot['duration']}]
+        rows.append({'id': shot['id'], 'description': shot['description'], 'duration': shot['duration'],
+                     'clip': clip_of(shot), 'captions': captions, 'audio': audio})
+    return rows

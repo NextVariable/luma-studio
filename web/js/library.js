@@ -9,10 +9,10 @@ L.views.library=view=>{
   const f=first&&(first.shots.find(s=>s.image||s.video));
   L.setAmbient(f||(ps[0]?{id:ps[0].id}:null));
   view.innerHTML=`<section class="library">
-    <div class="lib-compact"><h1>作品</h1><button class="btn" id="import-compact">导入短剧包</button><button class="btn primary" id="new-compact">新建作品</button></div>
+    <div class="lib-compact"><h1>作品</h1><button class="btn" data-sample>打开三镜样片</button><button class="btn" id="import-compact">导入短剧包</button><button class="btn primary" id="new-compact">新建作品</button></div>
     <div class="lib-hero">
       <h1>今天想拍什么？</h1>
-      <p>写下故事，拆分镜头、设定角色，在本机导出成片。</p>
+      <p>写下故事，或<button class="btn ghost small" data-sample>打开三镜样片</button></p>
       <div class="slate big">
  <div class="slate-tag"><span>新作品</span><span class="num">第 1 集</span></div>
         <textarea class="slate-text" id="story" rows="3" maxlength="100000" placeholder="例如：雨夜，阿青在巷口等一个不会来的人。她看见来人，却转身离开。"></textarea>
@@ -33,6 +33,12 @@ L.views.library=view=>{
    <div class="meta"><h3>${esc(p.title)}</h3><div class="facts"><span>${p.episodes.length} 集</span><span>${p.shots.length} 镜</span><span class="num">${L.clock(sec)}</span>${p.updated?`<span>${L.timeAgo(p.updated)}</span>`:''}</div></div></button>`}).join('')}</div></div>`
     :`<p class="faint lib-empty">作品会出现在这里。</p>`}
   </section>`;
+  $$('[data-sample]',view).forEach(button=>button.onclick=()=>L.busy(button,async()=>{
+    const project=await L.api('/api/projects/sample',{});
+    await L.refresh();
+    L.openProject(project.id,'shots');
+    await L.openRehearsal();
+  }));
   let fmt='16:9';
   $$('#story-fmt button',view).forEach(b=>b.onclick=()=>{fmt=b.dataset.f;$$('#story-fmt button',view).forEach(x=>x.setAttribute('aria-pressed',x===b))});
   const story=$('#story',view);

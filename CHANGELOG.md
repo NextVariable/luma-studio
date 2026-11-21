@@ -5,6 +5,7 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). I
 ## [Unreleased]
 
 ### Added
+- Seedream storyboard generation and Wan first-frame video with per-request quotes. The bundled three-shot scene supports a two-person wide shot, two reverse shots and offline rehearsal. Live cloud output remains unverified.
 - Library home with a prompt composer, a wall of works and cached thumbnails.
 - Left navigation rail, full-bleed shot stage and drag-and-drop shot reordering.
 - Prepared image and video generation through fal, with list-price estimates before each call.

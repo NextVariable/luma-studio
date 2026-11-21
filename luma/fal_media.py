@@ -16,6 +16,8 @@ IMAGE = 'fal-ai/flux-pro/kontext'
 TEXT_IMAGE = IMAGE + '/text-to-image'
 VIDEO = 'fal-ai/kling-video/v2.5-turbo/pro/image-to-video'
 
+STORYBOARD = 'fal-ai/nano-banana/edit'
+
 PROFILES = {
     model: {
         'verified': True,
@@ -58,6 +60,13 @@ def identity(model):
 def arguments(kind, context, media_path):
     segment = context['generation_segment']
     model = segment['model']
+    if kind == 'image' and model == STORYBOARD:
+        refs = segment['references']
+        if [ref['role'] for ref in refs] not in (['character','composition'], ['character','character','composition']):
+            raise ValueError('分镜图需要角色设定图和机位构图')
+        return dict(prompt=segment['instruction'], image_urls=[image_url(media_path(r['file'])) for r in refs],
+                    aspect_ratio=segment['parameters']['aspect_ratio'], num_images=1,
+                    limit_generations=True, output_format='png')
     profile = PROFILES.get(model)
     if not profile or profile['kind'] != kind or segment['mode'] not in profile['modes']:
         raise ValueError('fal 模型与已确认的制作方式不一致')
@@ -75,12 +84,15 @@ def arguments(kind, context, media_path):
     if len(refs) != profile['max_images']:
         raise ValueError('fal 参考图数量与已确认的制作方式不一致')
     if refs:
-        file = media_path(refs[0]['file'])
-        mime = mimetypes.guess_type(file.name)[0]
-        if mime not in ('image/png', 'image/jpeg', 'image/webp') or file.stat().st_size > 8 * 1024 * 1024:
-            raise ValueError('fal 参考图须为不超过 8 MB 的 PNG、JPEG 或 WebP')
-        body['image_url'] = f'data:{mime};base64,' + base64.b64encode(file.read_bytes()).decode('ascii')
+        body['image_url'] = image_url(media_path(refs[0]['file']))
     return body
+
+
+def image_url(file):
+    mime = mimetypes.guess_type(file.name)[0]
+    if mime not in ('image/png','image/jpeg','image/webp') or file.stat().st_size > 8*1024*1024:
+        raise ValueError('参考图须为不超过 8 MB 的 PNG、JPEG 或 WebP')
+    return f'data:{mime};base64,' + base64.b64encode(file.read_bytes()).decode('ascii')
 
 
 class Fal:
@@ -118,7 +130,7 @@ class Fal:
     def listen(self, kind, context, previous, on_progress):
         model = context['generation_segment']['model']
         run = previous.get('run_id')
-        if model not in PROFILES or not isinstance(run, str) or not re.fullmatch(r'[a-zA-Z0-9_-]{1,128}', run):
+        if model not in (*PROFILES,STORYBOARD) or not isinstance(run, str) or not re.fullmatch(r'[a-zA-Z0-9_-]{1,128}', run):
             raise ValueError('fal 任务缺少可核实的模型或运行编号')
         # Queue lookups are scoped to the owner and app, excluding the endpoint subpath.
         app = '/'.join(model.split('/')[:2])

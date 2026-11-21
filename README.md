@@ -42,7 +42,7 @@ To reproduce the local revision and export flow with generated test fixtures, ru
 | Capability | Service |
 | --- | --- |
 | Director planning and approval | Dify |
-| Prepared image and video generation | fal with FLUX.1 Kontext Pro and Kling 2.5 Turbo Pro |
+| Prepared image and video generation | Seedream 5.0 Flash for storyboards with character and camera references, Wan 2.6 Flash for silent first-frame video, and optional fal models |
 | Dialogue synthesis and single-shot proposals | OpenAI direct connection. A previously configured Dify revision workflow remains an option for proposals. |
 
 See [provider setup](docs/providers.md) for credentials and workflow templates. New libraries start with generation paused. The confirmation dialog shows an estimated cost or billing method and the number of local authorizations required. Providers bill their own accounts.

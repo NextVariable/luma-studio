@@ -82,7 +82,7 @@ L.confirmGeneration=async(title,request,confirm=true)=>{
   const q=await L.api('/api/jobs/quote',request);
   const remaining=L.S.data.spending.remaining;
   if(remaining<q.authorization_calls)throw Error('本次需要 '+q.authorization_calls+' 次本机授权，目前剩余 '+remaining+' 次');
-  const provider={fal:'fal',openai:'OpenAI',dify:'Dify'}[q.provider]||q.provider;
+  const provider={ark:'火山方舟',dashscope:'阿里云百炼',fal:'fal',openai:'OpenAI',dify:'Dify'}[q.provider]||q.provider;
   const details=[provider,q.model_label||q.model,q.duration!=null?q.duration+' 秒':null].filter(Boolean).join(' · ');
   const references=q.reference_count?'。将发送 '+q.reference_count+' 个选中的参考素材':'';
   const message=details+'。'+L.quoteCost(q)+'。本机授权 '+q.authorization_calls+' 次，剩余 '+remaining+' 次'+references+'。实际费用由服务商结算。';

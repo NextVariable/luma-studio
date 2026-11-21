@@ -9,11 +9,13 @@ from .episodes import normalize_project, validate_episodes, changed_episodes, pr
 from . import production
 from . import creative
 from . import preparation
-from . import fal_media
+from . import domestic_media, fal_media
 from . import assembly
 from . import continuity
 from . import local_storage
 from . import openai_direct
+from . import blocking
+from . import sample_scene
 from . import generation_quote
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -227,7 +229,8 @@ def open_preparation(pid,sid,kind='video'):
                            'outfit':next(v for v in a['versions'] if v['id']==s['asset_bindings'][a['id']]).get('outfit','未设定')}
                           for a in p['assets'] if a['kind']=='character' and a['id'] in s['asset_bindings']],
             'references':preparation.catalog(p,s),'fal_configured':bool(fal_media.key()),
-            'models':{name:{**copy.deepcopy(model),'connected':bool(fal_media.key() if model.get('provider')=='fal' else key_for(model['kind']))}
+            'domestic_configured':{name:bool(domestic_media.key(name)) for name in domestic_media.KEYS},
+            'models':{name:{**copy.deepcopy(model),'connected':bool(fal_media.key() if model.get('provider')=='fal' else domestic_media.key(model['provider']) if model.get('provider') in domestic_media.KEYS else key_for(model['kind']))}
                       for name,model in preparation.MODELS.items()},
             'status':preparation.report(p,sid,media_path,lambda kind:bool(key_for(kind)))}
 
@@ -343,6 +346,13 @@ def revision_media_impact(p,before,after):
             if not provider:return None
             duration=segment['end']-segment['start'] if kind=='video' else None
         else:
+            selected=takes.get(before.get('selected_takes',{}).get(kind),{})
+            source=selected.get('source')
+            if source in domestic_media.KEYS:
+                model=selected.get('model',domestic_media.SEEDREAM) if kind=='image' else domestic_media.WAN
+                duration=after['duration'] if kind=='video' else None
+                if duration is not None and (int(duration)!=duration or not 2<=duration<=15):return None
+                return generation_quote.estimate(kind,source,model,duration)
             model=fal_media.IMAGE if kind=='image' else fal_media.VIDEO
             provider='fal'
             duration=after['duration'] if kind=='video' else None
@@ -457,6 +467,28 @@ def apply_job(pid, jid, expected, mode=None, preview_digest=None):
             for a in items: p['assets'].append({**a,'id':uid(),'version':1})
         p['applied']=[*p.get('applied',[]),jid]
         return save(p,expected)
+
+def shot_camera(body, apply=False):
+    p=project(body['project_id'])
+    if p['revision']!=body['revision']:raise ValueError('作品已更新，请刷新后再调整机位')
+    shot=preparation.shot_of(p,body['shot_id'])
+    actors=blocking.layout(p,shot)
+    camera=body.get('camera',blocking.current_camera(shot,actors))
+    image=blocking.render(camera,actors,p['creative_brief']['format']=='9:16')
+    if not apply:
+        return {'actors':actors,'camera':camera,'image':blocking.preview(image),
+                'presets':{name:blocking.preset(name) for name in blocking.PRESETS}}
+    filename=uid()+'.png'
+    if shot.get('locked'):raise ValueError('请先解除镜头锁定')
+    shot['composition_reference']={'actors':actors,'camera':camera,'file':filename}
+    path=MEDIA/filename
+    try:
+        path.write_bytes(image)
+        return save(p,body['revision'])
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
+
 
 def edit_production(body):
     with LOCK:
@@ -576,7 +608,66 @@ def discard_upload(name):
     path.unlink()
     return {'discarded':name}
 
-def job_request(pid,kind,payload):
+def storyboard_packet(p,sid,model=fal_media.STORYBOARD):
+    if model != fal_media.STORYBOARD and model not in domestic_media.STILL_MODELS:
+        raise ValueError('分镜模型无效')
+    s=preparation.shot_of(p,sid)
+    ref=s.get('composition_reference') or {}
+    if not ref or ref.get('actors')!=blocking.layout(p,s):
+        raise ValueError('请先为当前角色保存机位构图')
+    view=ref['camera']['view']
+    if view not in blocking.PRESETS:
+        raise ValueError('机位无效，请重新保存构图')
+    actors = ref['actors'] if view == 'wide' else [ref['actors'][0 if view == 'left' else 1]]
+    assets = {a['id']: a for a in p['assets']}
+    bindings = s['asset_bindings']
+    versions = []
+    refs = []
+    instructions = ['绘制一张完成的漫剧分镜。']
+
+    def bound_version(asset):
+        version = next((v for v in asset['versions'] if v['id'] == bindings.get(asset['id'])), None)
+        if not version:
+            raise ValueError(f"请重新绑定{asset['name']}的版本")
+        versions.append(version['id'])
+        return version
+
+    def add_reference(role, file, label):
+        path = media_path(file)
+        if path.stat().st_size > 8*1024*1024:
+            raise ValueError(f'{label}超过 8 MB')
+        refs.append(dict(role=role, file=file, label=label,
+                         reference_id=hashlib.sha256(path.read_bytes()).hexdigest()))
+
+    for index, actor in enumerate(actors, 1):
+        version = bound_version(assets[actor['id']])
+        views = version.get('views') or {}
+        portrait = version.get('file') or views.get('three_quarter') or views.get('front')
+        name = version.get('name') or actor['name']
+        if not portrait:
+            raise ValueError(f'请为{name}当前绑定的造型添加角色参考图')
+        add_reference('character', portrait, name + ' · 角色参考')
+        position = ('左侧' if index == 1 else '右侧') if view == 'wide' else '主体'
+        instructions.append(f"图{index}用于{position}人物{name}的面貌与衣着。造型：{version.get('description','')}。")
+
+    location = (s.get('creative_spec') or {}).get('locationId')
+    scenes = [assets[k] for k in s['asset_ids'] if assets[k]['kind'] == 'scene' and (not location or k == location)]
+    if len(scenes) > 1 or (location and not scenes):
+        raise ValueError('请为当前镜头明确绑定一个拍摄场景')
+    if scenes:
+        scene = bound_version(scenes[0])
+        instructions.append(f"场景：{scene.get('name') or scenes[0]['name']}。{scene.get('description','')}。")
+    add_reference('composition', ref['file'], '机位构图')
+    instructions.append(f"图{len(refs)}仅用于人物站位、视线、景别和机位。背景依照镜头与场景设定绘制。"
+                        f"镜头：{s['description']}。画风：{p['creative_brief']['style']}。")
+    prompt = ''.join(instructions)
+    return dict(id='storyboard-'+sid,shot_id=sid,start=0,end=s['duration'],duration=s['duration'],
+                kind='image',mode='storyboard',provider=domestic_media.PROVIDER.get(model, 'fal'),model=model,
+                references=refs,parameters={'aspect_ratio':p['creative_brief']['format']},
+                instruction=prompt,plan_digest=production.digest([refs,prompt,versions,ref['camera']]))
+
+
+def job_request(pid,kind,payload,*,quoting=False):
     if kind not in ('script','assets','shots','revision','image','video','audio','plan','qc','export','assemble'): raise ValueError('未知任务类型')
     p=project(pid)
     episode_id=payload.get('episode_id') or (p['episodes'][0]['id'] if len(p['episodes'])==1 else None)
@@ -592,7 +683,9 @@ def job_request(pid,kind,payload):
     packet=None
     expected_plan=payload.get('preparation_digest')
     if kind in ('image','video'):
-        packet=preparation.freeze(p,snapshot['target_shot_id'],kind,payload.get('segment_id'),media_path,lambda k:bool(key_for(k)))
+        if kind=='image' and payload.get('storyboard') is True:
+            packet=storyboard_packet(p,snapshot['target_shot_id'],payload.get('model',fal_media.STORYBOARD))
+        else:packet=preparation.freeze(p,snapshot['target_shot_id'],kind,payload.get('segment_id'),media_path,None if quoting else lambda k:bool(key_for(k)))
         if expected_plan is not None and expected_plan!=packet['plan_digest']:
             raise ValueError('制作准备已变更，请重新打开并确认后生成')
         refs=packet['references'];selected={(r['reference_id'],r['role']) for r in refs}
@@ -606,13 +699,15 @@ def job_request(pid,kind,payload):
     if kind=='revision' and (not isinstance(payload.get('instruction'),str) or not 1<=len(payload['instruction'].strip())<=2000):raise ValueError('请填写不超过 2000 字的单镜修改要求')
     if kind=='export' and not production.readiness(p,snapshot['episode_id'])['can_export']:
         raise ValueError('导出前每个镜头都需有图片或视频、通过审核且无待复核修改')
-    uses_fal = bool(packet and packet['provider'] == 'fal')
-    if kind!='export':
-        if not uses_fal:
-            encode_context(snapshot)
-            if not uses_openai and not key_for(kind):raise ValueError('尚未连接该 Dify 工作流；请先配置已发布应用的 API Key')
-    provider=(fal_media.identity(packet['model']) if uses_fal else openai_direct.identity(kind)
-              if uses_openai else provider_identity(kind)) if kind!='export' else None
+    provider=None
+    if packet and packet['provider'] in domestic_media.KEYS:
+        provider=domestic_media.identity(packet['model'])
+    elif packet and packet['provider']=='fal':
+        provider=fal_media.identity(packet['model'])
+    elif kind!='export':
+        encode_context(snapshot)
+        if not uses_openai and not key_for(kind):raise ValueError('尚未连接该 Dify 工作流；请先配置已发布应用的 API Key')
+        provider=openai_direct.identity(kind) if uses_openai else provider_identity(kind)
     return p,snapshot,packet,provider
 
 
@@ -622,7 +717,7 @@ def build_job_quote(kind,snapshot,packet,provider):
     quote=generation_quote.estimate(kind,name,model,
                                    packet['duration'] if packet and kind=='video' else None,
                                    snapshot.get('instruction',''))
-    if packet:quote['model_label']=preparation.MODELS[model].get('label',model)
+    if packet:quote['model_label']=domestic_media.STILL_MODELS[model][0] if model in domestic_media.STILL_MODELS else 'Nano Banana Edit' if model==fal_media.STORYBOARD else preparation.MODELS[model].get('label',model)
     quote['reference_count']=len(snapshot.get('reference_media',[]))
     quote['digest']=production.digest({'basis':snapshot.get('basis'),'speech':snapshot.get('speech'),
                                        'instruction':snapshot.get('instruction'),'packet':packet,
@@ -632,8 +727,15 @@ def build_job_quote(kind,snapshot,packet,provider):
 
 def preview_job_quote(pid,kind,payload):
     if kind in ('export','assemble'):raise ValueError('本地任务不需要生成报价')
-    _,snapshot,packet,provider=job_request(pid,kind,payload)
-    return build_job_quote(kind,snapshot,packet,provider)
+    _,snapshot,packet,provider=job_request(pid,kind,payload,quoting=True)
+    quote=build_job_quote(kind,snapshot,packet,provider)
+    if packet and packet['provider'] in domestic_media.KEYS:
+        domestic_media.arguments(kind,snapshot,media_path)
+        quote.update(references=packet['references'],configured=bool(domestic_media.key(packet['provider'])))
+    elif packet and packet['model']==fal_media.STORYBOARD:
+        fal_media.arguments(kind,snapshot,media_path)
+        quote.update(references=packet['references'],configured=bool(fal_media.key()))
+    return quote
 
 
 def enqueue(pid,kind,payload,nonce):
@@ -641,6 +743,14 @@ def enqueue(pid,kind,payload,nonce):
     p,snapshot,packet,provider=job_request(pid,kind,payload)
     expected_plan=payload.get('preparation_digest')
     quote=build_job_quote(kind,snapshot,packet,provider) if provider else None
+    if packet and packet['provider'] in domestic_media.KEYS:
+        if not payload.get('quote_digest'):raise ValueError('请先确认本次生成报价')
+        if not domestic_media.key(packet['provider']):raise ValueError('请先配置 ' + domestic_media.KEYS[packet['provider']])
+        expected_plan=packet['plan_digest']
+    elif packet and packet['model']==fal_media.STORYBOARD:
+        if not payload.get('quote_digest'):raise ValueError('请先确认分镜图的报价')
+        if not fal_media.key():raise ValueError('请先配置 fal API Key')
+        expected_plan=packet['plan_digest']
     if 'quote_digest' in payload and (not quote or payload['quote_digest']!=quote['digest']):
         raise ValueError('生成参数或报价已变化，请重新确认')
     dedupe=f'{pid}:{snapshot["episode_id"]}:{kind}:{nonce}'
@@ -686,9 +796,14 @@ def check_provider(payload, kind=None):
         if kind not in openai_direct.MODELS or not openai_direct.key() or frozen!=openai_direct.identity(kind):
             raise ValueError('OpenAI 模型或 Key 已变更，请重新确认请求')
         return
+    if frozen.get('provider') in domestic_media.KEYS:
+        model=payload['snapshot']['generation_segment']['model']
+        if not domestic_media.key(frozen['provider']) or model not in domestic_media.PROVIDER or frozen != domestic_media.identity(model):
+            raise ValueError('生成模型、服务地址或凭据已变化，请核实原任务')
+        return
     if frozen.get('provider') == 'fal':
         model = payload.get('snapshot', {}).get('generation_segment', {}).get('model')
-        if model not in fal_media.PROFILES or frozen != fal_media.identity(model):
+        if model not in (*fal_media.PROFILES,fal_media.STORYBOARD) or frozen != fal_media.identity(model):
             raise ValueError('fal 模型或 Key 已变更，请恢复原配置核实此任务')
         return
     kind=kind or next((k for k in ('script','assets','shots','revision','image','video','audio','plan','qc') if key_env_for(k)==frozen['key_env']),None)
@@ -728,13 +843,18 @@ def configure_dify(base,key,kind='shots'):
     save_local_credentials({'DIFY_BASE_URL':base,('DIFY_PRODUCTION_KEY' if kind=='shots' else 'DIFY_'+kind.upper()+'_KEY'):key})
     return {'configured':True,'verified':False,'base_url':base}
 
-def configure_fal(key):
-    if not isinstance(key,str):raise ValueError('请输入 fal API Key')
+def configure_media_key(provider,key):
+    names={'fal':'FAL_KEY', **domestic_media.KEYS}
+    if provider not in names:raise ValueError('未知媒体服务')
+    if not isinstance(key,str):raise ValueError('请输入 API Key')
     key=key.strip()
     if not key or len(key)>512 or any(not c.isascii() or not c.isprintable() or c.isspace() or ord(c) in (34,39) for c in key):
-        raise ValueError('请粘贴有效的 fal API Key')
-    save_local_credentials({'FAL_KEY':key})
+        raise ValueError('请粘贴有效的 API Key')
+    save_local_credentials({names[provider]:key})
     return {'configured':True,'verified':False}
+
+def configure_fal(key):
+    return configure_media_key('fal',key)
 
 def configure_openai(key):
     if not isinstance(key,str):raise ValueError('请输入 OpenAI API Key')
@@ -956,7 +1076,8 @@ def work_once():
     try:
         payload=json.loads(row['payload'])
         provider = payload.get('provider', {}).get('provider','dify')
-        uses_fal = provider == 'fal'
+        direct_media = domestic_media if provider in domestic_media.KEYS else fal_media if provider == 'fal' else None
+        adapter = domestic_media.DomesticMedia() if provider in domestic_media.KEYS else fal_media.Fal() if provider == 'fal' else None
         uses_openai = provider == 'openai'
         def checkpoint(result):
             with connect() as c:
@@ -971,11 +1092,11 @@ def work_once():
             result=json.loads(row['result']);state='succeeded'
         elif payload.get('operation')=='listen':
             check_provider(payload,row['kind'])
-            adapter = fal_media.Fal() if uses_fal else Dify()
+            adapter = adapter or Dify()
             result=adapter.listen(row['kind'],payload['snapshot'],json.loads(row['result'] or '{}'),checkpoint);state=result['state']
         else:
             check_provider(payload,row['kind'])  # before spend(): a refused job costs no call
-            if not uses_fal:
+            if not direct_media:
                 if not uses_openai and not key_for(row['kind']):raise ValueError('该 Dify 工作流已断开连接；未提交生成，未扣授权次数')
                 encode_context(payload['snapshot'])
             if len(payload['snapshot'].get('reference_media',[]))>10:raise ValueError('单次生成最多使用 10 个参考素材，未扣授权次数')
@@ -998,11 +1119,13 @@ def work_once():
                 if row['kind'] in ('image','video'):
                     frozen=payload.get('generation_unit',{}).get('segment')
                     if not frozen:raise ValueError('旧媒体任务没有片段制作准备，拒绝直接提交')
-                    current_packet=preparation.freeze(current,frozen['shot_id'],row['kind'],frozen['id'],media_path,lambda k:bool(key_for(k)))
+                    if frozen['mode']=='storyboard':
+                        current_packet=storyboard_packet(current,frozen['shot_id'],frozen['model'])
+                    else:current_packet=preparation.freeze(current,frozen['shot_id'],row['kind'],frozen['id'],media_path,lambda k:bool(key_for(k)))
                     if current_packet!=frozen:raise ValueError('制作准备或模型能力已变化，请重新确认片段')
                 if not production.fresh(current,payload['snapshot']):raise ValueError('来源镜头或承接状态已变化，未提交生成，请重新准备')
-                if uses_fal:
-                    arguments = fal_media.arguments(row['kind'], payload['snapshot'], media_path)
+                if direct_media:
+                    arguments = direct_media.arguments(row['kind'], payload['snapshot'], media_path)
                 if not uses_openai:spend()
             if uses_openai:
                 credential=openai_direct.key()
@@ -1022,8 +1145,8 @@ def work_once():
                     result=openai_direct.revise(payload['snapshot'],credential,authorize)
                     if result['state']=='succeeded':
                         revision_comparison(project(row['project_id']),payload['snapshot'],result['result'])
-            elif uses_fal:
-                result=fal_media.Fal().submit(row['kind'], payload['snapshot'], arguments, checkpoint)
+            elif direct_media:
+                result=adapter.submit(row['kind'], payload['snapshot'], arguments, checkpoint)
             elif row['kind'] in ('image','video','audio'):
                 result=Dify().run(row['kind'],payload['snapshot'],checkpoint,media_path=media_path)
             else:result=Dify().run(row['kind'],payload['snapshot'],checkpoint)
@@ -1043,8 +1166,10 @@ def work_once():
                 # Finished paid output is retained even if the user has since locked the shot.
                 was_locked=s.get('locked');s['locked']=False
                 source=provider
-                label={'fal':'fal 生成候选','openai':'OpenAI 配音候选','dify':'Dify 生成候选'}[source]
+                label={'ark':'Seedream 分镜候选','dashscope':'Wan 视频候选','fal':'fal 生成候选','openai':'OpenAI 配音候选','dify':'Dify 生成候选'}[source]
                 t=production.add_take(s,row['kind'],file,label,source,basis=payload.get('generation_unit',{}).get('basis') or production.take_basis(next(x for x in payload['snapshot']['shots'] if x['id']==s['id'])),job_id=row['id'],shot_basis=production.content_basis(next(x for x in payload['snapshot']['shots'] if x['id']==s['id'])))
+                if t and source in domestic_media.KEYS:
+                    t['model']=payload['provider']['model']
                 if t and payload.get('generation_unit',{}).get('segment'):t['generation_segment']={k:payload['generation_unit']['segment'][k] for k in ('id','start','end','shot_id')}
                 if t and row['kind']=='audio':
                     snapshot=payload['snapshot']
@@ -1164,6 +1289,9 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/api/continuity/confirm':return self.respond(confirm_continuity(body['project_id'],body['episode_id'],body['revision'],body['digest'],body['resolution'],body.get('reason','')))
             if path=='/api/import/drama/preview':return self.respond(preview_drama_import(body.get('bundle')))
             if path=='/api/import/drama/apply':return self.respond(apply_drama_import(body.get('id'),body.get('digest')))
+            if path in ('/api/camera/preview','/api/camera/apply'):return self.respond(shot_camera(body,path.endswith('/apply')))
+            if path=='/api/projects/sample':return self.respond(sample_scene.create(MEDIA,save))
+            if path=='/api/rehearsal':return self.respond(production.rehearsal(project(body['project_id']),body['episode_id']))
             if path=='/api/projects':return self.respond(create(body['title'],body.get('script','')))
             if path=='/api/shots':return self.respond(add_shot(body['project_id'],body['episode_id'],body['revision'],body.get('fields',{})))
             if path=='/api/apply':return self.respond(apply_job(body['project_id'],body['job_id'],body['revision'],body.get('mode'),body.get('preview_digest')))
@@ -1182,6 +1310,7 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/api/settings/dify':return self.respond(configure_dify(body.get('base_url',''),body.get('api_key',''),body.get('kind','shots')))
             if path=='/api/settings/dify/check':return self.respond(Dify().inspect_connection(body.get('kind')))
             if path=='/api/settings/openai':return self.respond(configure_openai(body.get('api_key')))
+            if path=='/api/settings/media-key':return self.respond(configure_media_key(body.get('provider'),body.get('api_key')))
             if path=='/api/settings/fal':return self.respond(configure_fal(body.get('api_key')))
             if path=='/api/cancel':
                 with connect() as c:c.execute("UPDATE jobs SET state='cancelled',updated=? WHERE id=? AND state IN ('queued','running','waiting_review')",(time.time(),body['id']))

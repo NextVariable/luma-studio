@@ -43,7 +43,7 @@ L.views.shots=view=>{
       <section class="stage" id="stage">${stage(p,list,s,it)}</section>${shotPanel(p,s,it)}
     </div>
     <section class="reel" aria-label="镜头序列">
-      <div class="reel-head"><span class="num">${list.length} 镜 ${L.clock(L.total(list))}</span><span class="num">${done} / ${list.length} 可交付</span><span class="faint swipe-hint">${L.mobilePaging()?'在画面上左右滑动切换镜头':'画面或镜头条上滚动切镜头'}</span><span class="spacer"></span>
+      <div class="reel-head"><button class="btn small" id="rehearse">整集预演</button><span class="num">${list.length} 镜 ${L.clock(L.total(list))}</span><span class="num">${done} / ${list.length} 可交付</span><span class="faint swipe-hint">${L.mobilePaging()?'在画面上左右滑动切换镜头':'画面或镜头条上滚动切镜头'}</span><span class="spacer"></span>
         <div class="filters" role="group" aria-label="筛选镜头">${[['all','全部'],['missing','缺画面'],['review','待处理'],['ready','可交付']].map(([k,v])=>`<button data-filter="${k}" aria-pressed="${L.ui.filter===k}">${v}</button>`).join('')}</div></div>
       <div class="strip" id="strip" role="listbox" aria-label="镜头">${list.map((x,i)=>{const st=L.shotState(x,item(x));
         return `<button class="shot ${visible.includes(x)?'':'dim'}" role="option" data-sid="${esc(x.id)}" ${x.id===s.id?'aria-current="true" aria-selected="true"':'aria-selected="false"'} style="width:${Math.max(84,Math.round(x.duration*28))}px" title="${esc(L.shotTitle(x,i)+' · '+st.label)}">${thumb(x)}<span class="dot ${st.tone}"></span><span class="lbl num">${String(i+1).padStart(2,'0')}</span></button>`}).join('')}
@@ -51,6 +51,10 @@ L.views.shots=view=>{
     </section>
     ${composer(p,list,s,it)}
   </div>`;
+  $('#rehearse',view).onclick=e=>L.busy(e.currentTarget,async()=>{
+    if(L.S.dirty)throw Error('请先保存镜头修改，再预演本集');
+    await L.openRehearsal();
+  });
   bindStrip(view,list);
   $$('[data-filter]',view).forEach(b=>b.onclick=async()=>{if(!await L.leaveOk())return;L.ui.filter=b.dataset.filter;L.render()});
   bindParts(view,p,s,list,it);
@@ -124,6 +128,8 @@ function stage(p,list,s,it){
   return `${f?`<div class="stage-media">${mediaTag(f,{id:'stage-video'})}</div><div class="stage-shade"></div>`:`<div class="stage-glow lit" style="background:${L.glow(s.id)}"></div><div class="stage-empty"><h2>还没有画面</h2><p>导入一张图片或一段视频，作为这一镜的画面。</p><div class="row" style="justify-content:center;margin-top:16px"><button class="btn primary" data-pop="media">导入画面</button></div></div>`}
     <div class="stage-top"><span class="chip"><span class="dot ${st.tone}"></span>${esc(st.label)}</span>${s.locked?'<span class="chip">已锁定</span>':''}
       <span class="spacer"></span>
+      ${(s.asset_ids||[]).filter(id=>p.assets.some(a=>a.id===id&&a.kind==='character')).length===2?'<button class="chip tool" id="shot-camera">机位</button>':''}
+      ${s.composition_reference?'<button class="chip tool" id="storyboard-quote">正式分镜图</button>':''}
       <button class="chip tool ${L.ui.tab==='dialogue'?'on':''}" data-pop="dialogue">对白${lines?' '+lines:''}</button>
       <button class="chip tool ${L.ui.tab==='media'?'on':''}" data-pop="media">素材${takes?' '+takes:''}${it?.stale_media?'<span class="dot stop"></span>':''}</button>
       <button class="chip tool ${L.ui.tab==='make'?'on':''}" data-pop="make">制作</button>
@@ -188,6 +194,13 @@ function bindComposer(view,p,s,it){
 }
 
 function bindStage(view,s){
+  const quote=$('#storyboard-quote',view);
+  if(quote)quote.onclick=()=>L.busy(quote,async()=>{if(L.S.dirty)throw Error('请先保存镜头修改');await L.storyboardQuote(s.id)});
+  const camera=$('#shot-camera',view);
+  if(camera)camera.onclick=()=>L.busy(camera,async()=>{
+    if(L.S.dirty)throw Error('请先保存镜头修改');
+    await L.shotCamera(s);
+  });
   const v=$('#stage-video',view),b=$('#play',view);
   if(v&&b){
     const sync=()=>{b.textContent=v.paused?'▶':'❚❚';b.setAttribute('aria-label',v.paused?'播放':'暂停')};
@@ -333,11 +346,11 @@ function media(p,s,it){
       <div class="row"><button class="btn primary small" id="keep-media" ${dis}>确认沿用</button><button class="btn small" id="swap-media" ${dis}>导入新画面</button></div>`:''}
     <div class="row"><span class="sub" style="margin:0">画面候选（${visuals.length}）</span><span class="spacer"></span><button class="btn small" id="m-import" ${dis}>导入图片或视频</button></div>
     ${visuals.length?`<div class="takes">${visuals.map(t=>{const on=sel[t.kind]===t.id,old=L.candidateOutdated(t,basis),part=L.isPartialTake(t,s);
-      return `<button class="take" data-take="${esc(t.id)}" aria-pressed="${on}" ${dis||(part?'disabled':'')} title="${esc(t.label)}">${mediaTag(t.file)}<span class="tag">${on?'使用中':t.source==='import'?'导入':t.source==='assembly'?'拼接':'生成'}</span>${old?'<span class="warn">设定已变</span>':''}${part?'<span class="warn">局部片段</span>':''}</button>`}).join('')}</div>`
+      return `<button class="take" data-take="${esc(t.id)}" aria-pressed="${on}" ${dis||(part?'disabled':'')} title="${esc(t.label)}">${mediaTag(t.file)}<span class="tag">${on?'使用中':['import','blocking'].includes(t.source)?esc(t.label||'导入'):t.source==='assembly'?'拼接':'生成'}</span>${old?'<span class="warn">设定已变</span>':''}${part?'<span class="warn">局部片段</span>':''}</button>`}).join('')}</div>`
     :'<p class="faint" style="margin:0">还没有画面。导入一张图片或一段视频作为这一镜的画面。</p>'}
     ${sv?`<div class="sub">剪辑范围</div><div class="grid2"><label class="field"><span>起点（秒）</span><input class="input num" id="c-in" type="number" min="0" step="0.1" value="${s.clip?.trim_start??s.trim_start??0}" ${dis}></label>
       <label class="field"><span>终点（秒，可空）</span><input class="input num" id="c-out" type="number" min="0" step="0.1" value="${s.clip?.trim_end??''}" ${dis}></label></div>
-      <div class="row"><button class="btn small" id="c-save" ${dis}>应用剪辑</button><span class="faint">较短的素材停在最后一帧，较长的会被截断。</span></div>`:''}
+      <div class="row"><button class="btn small" id="clip-save" ${dis}>应用剪辑</button><span class="faint">较短的素材停在最后一帧，较长的会被截断。</span></div>`:''}
     ${binds.length?`<div class="sub">角色与素材版本</div>${binds.map(({a,vid})=>`<div class="row"><span style="flex:1">${esc(a.name)}</span><select class="select" data-bind-asset="${esc(a.id)}" style="width:auto;max-width:190px" ${dis}>${a.versions.map(v=>`<option value="${esc(v.id)}" ${v.id===vid?'selected':''}>${esc(v.label||v.outfit||'版本')}${v.id===a.selected_version?'（当前）':''}</option>`).join('')}</select></div>`).join('')}
       <button class="btn ghost small" id="bind-current" style="align-self:flex-start" ${dis}>全部更新为素材当前版本</button>`:''}`;
 }
@@ -353,7 +366,7 @@ function bindMedia(view,p,s,list,it){
     await L.production('select_take',{shot_id:s.id,take_id:t.id});
     L.toast(item(L.shot())?.stale_media?'已选中旧画面，请确认沿用或更换':'已选用');L.render();
   }));
-  $('#c-save',view)?.addEventListener('click',e=>L.busy(e.currentTarget,async()=>{
+  $('#clip-save',view)?.addEventListener('click',e=>L.busy(e.currentTarget,async()=>{
     const a=Number($('#c-in',view).value||0),raw=$('#c-out',view).value,b=raw===''?null:Number(raw);
     await L.production('set_clip',{shot_id:s.id,source_take_id:s.selected_takes.video,trim_start:a,trim_end:b});L.toast('剪辑已应用，这一镜需要重新确认');L.render();
   }));
@@ -438,8 +451,12 @@ async function bindMake(view,p,s){
     function renderPanel(){
       const issues=[...new Set((data.status?.issues||[]).map(i=>i.message))];
       box.innerHTML=`
-        <details ${data.fal_configured?'':'open'}><summary>${data.fal_configured?'fal Key 已配置':'连接图片与视频服务'}</summary>
-          <label class="field"><span>fal API Key</span><input class="input" data-fal-key type="password" autocomplete="off"></label>
+        <details><summary>连接图片与视频服务</summary>
+          <label class="field"><span>服务</span><select class="select" data-provider>
+            <option value="ark">火山方舟 · Seedream${data.domestic_configured?.ark?'（已配置）':''}</option>
+            <option value="dashscope">百炼北京 · Wan${data.domestic_configured?.dashscope?'（已配置）':''}</option>
+            <option value="fal">fal${data.fal_configured?'（已配置）':''}</option></select></label>
+          <label class="field"><span>API Key</span><input class="input" data-fal-key type="password" autocomplete="off"></label>
           <button class="btn small" data-connect-fal>保存 Key 到本机</button>
         </details>
         ${issues.length?`<div class="notice ${s.preparation?'wait':''}"><div class="grow">${issues.map(message=>`<p class="muted">${esc(message)}</p>`).join('')}</div></div>`:'<p class="muted">制作准备已就绪。</p>'}
@@ -494,9 +511,9 @@ async function bindMake(view,p,s){
       });
       $('[data-connect-fal]',box).onclick=e=>L.busy(e.currentTarget,async()=>{
         const field=$('[data-fal-key]',box);
-        await L.api('/api/settings/fal',{api_key:field.value.trim()});field.value='';
+        await L.api('/api/settings/media-key',{provider:$('[data-provider]',box).value,api_key:field.value.trim()});field.value='';
         data=await open();if(!box.isConnected)return;
-        renderPanel();L.toast('已保存 fal Key，尚未运行模型');
+        renderPanel();L.toast('已保存 Key，尚未运行模型');
       });
       $('#p-save',box).onclick=e=>L.busy(e.currentTarget,()=>savePlan(plan.segments));
       $('#p-split',box).onclick=e=>L.busy(e.currentTarget,()=>{

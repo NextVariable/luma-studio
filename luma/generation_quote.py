@@ -1,16 +1,22 @@
 """Published list-price estimates. A quote is not a provider spending cap."""
 from decimal import Decimal
 
-from . import fal_media
+from . import domestic_media, fal_media
 from . import openai_direct
 
 
 def estimate(kind, provider, model=None, duration=None, instruction=''):
     dollars = None
     calls = 1
+    if model in domestic_media.PROVIDER and domestic_media.PROVIDER[model] == provider:
+        yuan = Decimal(domestic_media.STILL_MODELS[model][1]) if model in domestic_media.STILL_MODELS else Decimal('0.15') * int(duration)
+        return dict(provider=provider, model=model, duration=duration, estimated_cny=format(yuan,'.2f'),
+                    estimated_usd=None, authorization_calls=1, billing=f'预计 ¥{yuan:.2f}（人民币）')
     if provider == 'fal':
         if model in (fal_media.IMAGE, fal_media.TEXT_IMAGE):
             dollars = Decimal('0.04')
+        elif model == fal_media.STORYBOARD:
+            dollars = Decimal('0.0398')
         elif model == fal_media.VIDEO and duration in (5, 10):
             dollars = Decimal('0.07') * int(duration)
         billing = '按实际生成计费' if dollars is not None else '由服务商结算，暂无单价'
@@ -23,5 +29,5 @@ def estimate(kind, provider, model=None, duration=None, instruction=''):
     else:
         billing = '按 Dify 积分或所用模型账户结算，金额取决于工作流实际调用'
     return {'provider': provider, 'model': model, 'duration': duration,
-            'estimated_usd': format(dollars, '.2f') if dollars is not None else None,
+            'estimated_usd': str(dollars) if dollars is not None else None,
             'authorization_calls': calls, 'billing': billing}

@@ -17,3 +17,22 @@ Use [.env.example](../.env.example) as a template for manual configuration. Cred
 [Production workflows](../workflows/production/) includes the optional Dify single-shot revision template. The historical Dify audio workflow supports existing configurations and recovery of older tasks. New speech jobs use OpenAI. The [smoke workflows](../workflows/smoke/) are connection and contract fixtures.
 
 中文操作顺序为先在本机保存 Key，再确认制作参数，查看报价或计费方式，最后按需要开放本批生成额度。旧音色 `fable`、`onyx` 和 `nova` 需要新建受支持的角色音色版本，再显式更新镜头绑定。
+
+## Beijing-region storyboard and video models
+
+In shot preparation, open the media service settings and save the Ark and Beijing
+DashScope keys separately. Environment configuration is also supported via
+`ARK_API_KEY`, `DASHSCOPE_API_KEY` and (for a workspace-specific Beijing endpoint)
+`DASHSCOPE_WORKSPACE_ID`. Restart the app after editing the environment file.
+
+Open the storyboard image action on any of the three station shots and select
+Seedream 5.0 Flash. The wide shot sends both character references and the camera
+composition. Each reverse shot sends its subject and its own composition.
+Select the returned image candidate. In production preparation select Wan 2.6
+Flash, 720P and the selected storyboard as the first frame, then save the plan.
+Each generation requires its own quote confirmation and one local authorization.
+Wan produces silent video so the dialogue tracks can be reused. Existing copies
+of the sample may need their bound outfits and portrait filled in first.
+
+Run `python3 -m unittest discover -s tests -p test_domestic_media.py` to
+exercise this path offline with local media standing in for provider outputs.

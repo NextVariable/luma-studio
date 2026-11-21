@@ -4,10 +4,10 @@ import math
 import uuid
 from . import creative
 from . import continuity
-from . import fal_media
+from . import domestic_media, fal_media
 
 # Only provider models with a documented input/output contract belong here.
-MODELS = fal_media.PROFILES.copy()
+MODELS = {**fal_media.PROFILES, domestic_media.WAN: domestic_media.WAN_PROFILE}
 MODES = {'image': ('text_to_image','reference_to_image'),
          'video': ('text_to_video','reference_to_video','image_to_video','start_end_frames')}
 ROLES = ('reference_image','first_frame','last_frame')
@@ -158,7 +158,7 @@ def report(p,sid,media_path,connected=None,profiles=None):
             params=seg['parameters']
             if seg['kind']!=profile.get('kind') or mode not in profile.get('modes',[]):error('模型不支持所选生成方式',sid2)
             if not profile.get('provider') or not profile.get('evidence'):error('模型能力缺少核实来源',sid2)
-            if profile.get('provider') == 'fal' and any(r['source'] == 'shot_image' and r['file'] == s.get('image') for r in refs):
+            if profile.get('provider') in ('fal','dashscope') and any(r['source'] == 'shot_image' and r['file'] == s.get('image') for r in refs):
                 from .production import media_issue
                 if media_issue(s):error('本镜首帧来自修改前，请生成新图或确认沿用',sid2)
             limits=profile.get('duration',{})
@@ -173,7 +173,7 @@ def report(p,sid,media_path,connected=None,profiles=None):
             if any(counts[role]>profile.get('role_limits',{}).get(role,0) for role in ROLES):error('参考图用途或数量超出模型能力',sid2)
             if profile.get('parameter_sets') and not any(all(params.get(k)==v for k,v in combo.items()) for combo in profile['parameter_sets']):error('分辨率、画幅与帧率组合不受支持',sid2)
         if connected is not None:
-            service_ready = bool(fal_media.key()) if profile and profile.get('provider') == 'fal' else connected(seg['kind'])
+            service_ready = bool(fal_media.key()) if profile and profile.get('provider') == 'fal' else bool(domestic_media.key(profile['provider'])) if profile and profile.get('provider') in domestic_media.KEYS else connected(seg['kind'])
             if not service_ready:error('对应生成服务尚未连接',sid2)
         rows.append({'id':sid2,'start':seg['start'],'end':seg['end'],'duration':duration,'kind':seg['kind'],'model':seg['model'],'mode':mode,'parameters':copy.deepcopy(seg['parameters']),'references':refs})
     return {'ready':not errors,'issues':errors,'segments':rows,'plan_digest':creative.digest(plan),'operation_count':len(rows)}
