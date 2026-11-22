@@ -1060,7 +1060,7 @@ def public_job(row):
     job['generation_unit']=json.loads(row['payload']).get('generation_unit')
     job['batch_id']=json.loads(row['payload']).get('batch_id')
     if job['provider']:
-        job['provider']={k:job['provider'][k] for k in ('provider','model') if k in job['provider']}
+        job['provider']={k:job['provider'][k] for k in ('provider','model','host') if k in job['provider']}
     if job['generation_unit'] and job['generation_unit'].get('provider'):
         job['generation_unit']['provider']=job['provider']
 
