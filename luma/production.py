@@ -7,6 +7,7 @@ import uuid
 from . import creative
 
 from . import visual
+from . import art
 
 LEGACY_SHOT_FIELDS = ('description', 'duration', 'framing', 'camera', 'dialogue', 'lines', 'asset_ids', 'asset_bindings', 'continuity_from')
 SHOT_FIELDS = LEGACY_SHOT_FIELDS + ('creative_spec',)
@@ -65,6 +66,7 @@ def validate(p, media_path):
     if not isinstance(brief,dict) or brief.get('format') not in ('16:9','9:16') or brief.get('method') not in ('mixed','illustrated','video'):
         raise ValueError('请选择有效的画幅和制作方式')
     if not isinstance(brief.get('style'),str) or len(brief['style'])>2000:raise ValueError('视觉风格最多 2000 字')
+    if brief.get('art_style') not in (None,'','auto',*art.STYLES):raise ValueError('请选择有效的美术风格')
     assets={a['id']:a for a in p['assets']}
     for a in p['assets']:
         ids=[v['id'] for v in a['versions']]

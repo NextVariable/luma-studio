@@ -52,12 +52,15 @@ class VisualAssetTests(TestCase):
         self.assertEqual({s['id']: s['asset_bindings'][char['id']] for s in p['shots'] if char['id'] in s['asset_bindings']}, bound)
         p = self.approve(p, char, version['file'], 'primary')
         p = self.approve(p, char, front, 'front')
-        refs = p['creative_brief']['visual_bible']['references']
+        refs = [r for r in p['creative_brief']['visual_bible']['references']
+                if r['asset_id'] == char['id'] and r['version_id'] == version['id']]
         self.assertEqual({(r['view'], r['file']) for r in refs}, {('primary', version['file']), ('front', front)})
         with self.assertRaisesRegex(ValueError, '确认替换'):
             self.approve(p, char, front, 'front')
         p = self.approve(p, char, front, 'front', source='替换后的来源', replace=True)
-        self.assertEqual(len(p['creative_brief']['visual_bible']['references']), 2)
+        refs = [r for r in p['creative_brief']['visual_bible']['references']
+                if r['asset_id'] == char['id'] and r['version_id'] == version['id']]
+        self.assertEqual(len(refs), 2)
 
     def test_asset_generation_uses_existing_views_and_injects_work_style(self):
         char = self.character()
@@ -72,11 +75,17 @@ class VisualAssetTests(TestCase):
         p = studio.save(p, p['revision'])
         p = self.approve(p, style, style_file, 'primary', source='画风测试')
         char = self.character(p)
+        version = next(v for v in char['versions'] if v['id'] == char['selected_version'])
+        for view in ('primary', 'front', 'three_quarter'):
+            file = version['file'] if view == 'primary' else version['views'][view]
+            p = self.approve(p, char, file, view)
         packet = studio.asset_image_packet(p, dict(asset_id=char['id'], version_id=char['selected_version'],
                                                    instruction='保持雨夜氛围'))
         self.assertEqual([r['role'] for r in packet['references']],
                          ['character', 'character', 'character', 'style'])
         self.assertEqual([r['view'] for r in packet['references'][:3]], ['primary', 'front', 'three_quarter'])
+        self.assertTrue(all(r['status'] == 'approved' for r in packet['references']))
+        self.assertEqual(packet['art_label'], '电影写实')
         self.assertIn('禁止低多边形', packet['instruction'])
         self.assertIn('最后一张参考图', packet['instruction'])
         body = domestic_media.arguments('image', {'generation_segment': packet}, studio.media_path)
@@ -121,7 +130,7 @@ class VisualAssetTests(TestCase):
         p = studio.save(p, p['revision'])
         packet = studio.storyboard_packet(p, p['shots'][1]['id'], domestic_media.FLASH)
         reference = next(r for r in packet['references'] if r['role'] == 'character')
-        self.assertEqual((reference['status'], reference['view']), ('approved', 'primary'))
+        self.assertEqual((reference['status'], reference['view']), ('legacy', 'primary'))
 
     def test_changed_approved_file_is_rejected_before_generation(self):
         char = self.character()

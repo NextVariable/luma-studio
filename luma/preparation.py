@@ -5,6 +5,7 @@ import uuid
 from . import creative
 from . import continuity
 from . import domestic_media, fal_media
+from . import art, visual
 
 # Only provider models with a documented input/output contract belong here.
 MODELS = {**fal_media.PROFILES, domestic_media.WAN: domestic_media.WAN_PROFILE,
@@ -31,12 +32,17 @@ def character_versions(p,s):
 
 def catalog(p,s):
     items=[]
+    approvals=(p['creative_brief'].get('visual_bible') or {}).get('references',[])
     for aid,vid in s['asset_bindings'].items():
         a=next(a for a in p['assets'] if a['id']==aid)
         if a['kind']=='voice':continue
         v=next(v for v in a['versions'] if v['id']==vid)
+        states={state['view']:state for state in visual.view_states(v,approvals,a['kind'],aid,vid)}
         for view,file in {**({'primary':v['file']} if v.get('file') else {}),**v.get('views',{})}.items():
-            items.append({'source':'asset','asset_id':aid,'version_id':vid,'view':view,'file':file,'label':a['name']+' · '+{'primary':'设定图','front':'正面','side':'侧面','back':'背面','three_quarter':'四分之三侧面'}.get(view,view)})
+            state=states.get(view) or {'status':'unapproved'}
+            items.append({'source':'asset','asset_id':aid,'version_id':vid,'view':view,'file':file,
+                          'approved':state['status']!='unapproved','approval_status':state['status'],
+                          'label':a['name']+' · '+{'primary':'设定图','front':'正面','side':'侧面','back':'背面','three_quarter':'四分之三侧面'}.get(view,view)})
     # A video can replace the selected image without invalidating its pinned first frame.
     from .production import content_basis
     frames = {}
@@ -191,6 +197,10 @@ def freeze(p,sid,kind,segment_id,media_path,connected):
     seg=next((x for x in segments if x['id']==(segment_id or segments[0]['id'])),None)
     if not seg or seg['kind']!=kind:raise ValueError('生成片段不存在或类型不一致')
     profile=MODELS[seg['model']];row=next(x for x in result['segments'] if x['id']==seg['id'])
+    instruction=seg['instruction']
+    if kind=='video':
+        clause=art.video_clause(p['creative_brief'])
+        if len(instruction)+len(clause)<=2000:instruction=(instruction+' '+clause).strip()
     return {**copy.deepcopy(row),'shot_id':sid,'plan_digest':result['plan_digest'],'model_profile_digest':creative.digest(profile),
-            'provider':profile['provider'],'contract':profile['contract'],'instruction':seg['instruction'],
+            'provider':profile['provider'],'contract':profile['contract'],'instruction':instruction,
             'start_state':seg['start_state'],'end_state':seg['end_state'],'character_versions':copy.deepcopy(s['preparation']['character_versions'])}

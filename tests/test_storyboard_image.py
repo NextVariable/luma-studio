@@ -92,7 +92,7 @@ class StoryboardImageTests(TestCase):
                         if location == '室内书房':
                             self.assertNotIn('站台', packet['instruction'])
                         self.assertEqual([r['label'] for r in q['references']],
-                                         [name + ' · 角色参考' for name in names] + ['机位构图'])
+                                         [name + ' · 设定图' for name in names] + ['机位构图'])
                         self.assertEqual(q['references'][-1]['file'], shot['composition_reference']['file'])
             self.assertEqual(studio.spending()['used'], 0)
 
@@ -185,8 +185,12 @@ class StoryboardImageTests(TestCase):
             from luma import production
             production.normalize(p)
             style['versions'][0]['file'] = p['shots'][2]['image']
-            approved = [dict(role=a['kind'], asset_id=a['id'], version_id=a['selected_version'],
-                             source='本地测试素材', file=a['versions'][0]['file']) for a in (scene, style)]
+            character = next(a for a in p['assets'] if a['kind'] == 'character' and a['id'] in shot['asset_ids'])
+            char_version = next(v for v in character['versions'] if v['id'] == shot['asset_bindings'][character['id']])
+            approved = [dict(role='character', asset_id=character['id'], version_id=char_version['id'],
+                             source='本地测试素材', file=char_version['file'], view='primary')]
+            approved += [dict(role=a['kind'], asset_id=a['id'], version_id=a['selected_version'],
+                              source='本地测试素材', file=a['versions'][0]['file']) for a in (scene, style)]
             request = dict(shot_id=shot['id'], episode_id=shot['episode_id'], storyboard=True,
                            model=domestic_media.FLASH)
             old = studio.preview_job_quote(p['id'], 'image', request)
@@ -196,8 +200,8 @@ class StoryboardImageTests(TestCase):
             self.assertEqual(text['estimated_cny'], old['estimated_cny'])
             # Use new versions to add images to persisted assets.
             scene['versions'][0]['file'] = None
-            scene['versions'].append(dict(scene['versions'][0], id='scene-art', file=approved[0]['file']))
-            approved[0]['version_id'] = shot['asset_bindings'][scene['id']] = 'scene-art'
+            scene['versions'].append(dict(scene['versions'][0], id='scene-art', file=approved[1]['file']))
+            approved[1]['version_id'] = shot['asset_bindings'][scene['id']] = 'scene-art'
             p['creative_brief']['visual_bible'] = dict(palette='冷蓝背景', references=approved)
             p = studio.save(p, p['revision'])
             packet = studio.storyboard_packet(p, shot['id'], domestic_media.FLASH, reference_mode='text')

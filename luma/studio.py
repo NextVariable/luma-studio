@@ -16,7 +16,7 @@ from . import assembly
 from . import continuity
 from . import local_storage
 from . import openai_direct
-from . import blocking, visual, quality, comparison, evidence
+from . import blocking, visual, art, quality, comparison, evidence
 from . import sample_scene
 from . import generation_quote
 
@@ -688,21 +688,19 @@ def storyboard_packet(p,sid,model=fal_media.STORYBOARD, *, reference_mode='image
         version = bound_version(assets[actor['id']])
         views = version.get('views') or {}
         picks = visual.approved_refs(approvals, 'character', actor['id'], version['id'], version)
-        if picks:
-            pick_view, approval = picks[0]
-            portrait = approval['file']
-        else:
-            pick_view, approval = None, None
-            portrait = version.get('file') or views.get('three_quarter') or views.get('front')
+        pick_view, approval = picks[0] if picks else (None, None)
+        portrait = approval['file'] if approval else None
         name = version.get('name') or actor['name']
         if not portrait:
+            if version.get('file') or views:
+                raise ValueError(f'请先在角色与素材中批准{name}要用于分镜的参考视图')
             raise ValueError(f'请为{name}当前绑定的造型添加角色参考图')
         add_reference('character', portrait, name + ' · ' + visual.VIEW_LABELS.get(pick_view, '角色参考'))
-        if approval and approval.get('sha256') and refs[-1]['reference_id']!=approval['sha256']:
+        if approval.get('sha256') and refs[-1]['reference_id']!=approval['sha256']:
             raise ValueError('已批准的角色参考图文件发生变化')
         refs[-1].update(asset_id=actor['id'], version_id=version['id'],
-                        source=approval['source'] if approval else '镜头绑定的角色资产',
-                        view=pick_view, status='approved' if approval else 'legacy')
+                        source=approval['source'],
+                        view=pick_view, status='approved' if approval.get('sha256') else 'legacy')
         position = ('左侧' if index == 1 else '右侧') if view == 'wide' else '主体'
         instructions.append(f"图{index}用于{position}人物{name}的面貌与衣着。保持参考图的脸型、发型、发色和服装颜色。造型：{version.get('description','')}。服装：{version.get('outfit') or '以角色图为准'}。")
 
@@ -714,6 +712,8 @@ def storyboard_packet(p,sid,model=fal_media.STORYBOARD, *, reference_mode='image
         scene = bound_version(scenes[0])
         instructions.append(f"场景：{scene.get('name') or scenes[0]['name']}。{scene.get('description','')}。")
         picks = visual.approved_refs(approvals, 'scene', scenes[0]['id'], scene['id'], scene)
+        if ark and not picks and (scene.get('file') or scene.get('views')):
+            raise ValueError(f'请先在角色与素材中批准{scene.get("name") or scenes[0]["name"]}要用于分镜的参考视图')
         if ark and picks:
             pick_view, approval = picks[0]
             add_reference('scene', approval['file'], '场景参考 · ' + visual.VIEW_LABELS.get(pick_view, '设定图'))
@@ -750,6 +750,8 @@ def storyboard_packet(p,sid,model=fal_media.STORYBOARD, *, reference_mode='image
     instructions.append(f"镜头：{s['description']}。")
     if p['creative_brief']['style']:
         instructions.append(f"画风：{p['creative_brief']['style']}。")
+    instructions.append(art.constraints(p['creative_brief']))
+    style = art.resolve(p['creative_brief'])
     for key, label in visual.DIRECTION.items():
         if bible.get(key):
             instructions.append(f'{label}：{bible[key]}。')
@@ -767,7 +769,9 @@ def storyboard_packet(p,sid,model=fal_media.STORYBOARD, *, reference_mode='image
     return dict(id='storyboard-'+sid,shot_id=sid,start=0,end=s['duration'],duration=s['duration'],
                 kind='image',mode='storyboard',provider=domestic_media.PROVIDER.get(model, 'fal'),model=model,
                 references=refs,parameters={'aspect_ratio':p['creative_brief']['format']},
-                instruction=prompt,staging=staging,reference_mode=reference_mode,plan_digest=production.digest([refs,prompt,versions,ref['camera'],staging]))
+                instruction=prompt,staging=staging,reference_mode=reference_mode,
+                art_style=style['key'],art_label=style['label'],
+                plan_digest=production.digest([refs,prompt,versions,ref['camera'],staging]))
 
 
 def asset_image_packet(p, payload):
@@ -781,42 +785,46 @@ def asset_image_packet(p, payload):
     if not isinstance(instruction,str) or not 1<=len(instruction.strip())<=2000:
         raise ValueError('请填写不超过 2000 字的生成要求')
     bible = p['creative_brief'].get('visual_bible', {})
-    views = {**({'primary': version['file']} if version.get('file') else {}), **(version.get('views') or {})}
-    approved_views = dict(visual.approved_refs(bible.get('references', []), asset['kind'],
-                                               asset['id'], version['id'], version))
-    refs = []
-    for view in visual.allowed_views(asset['kind']):
-        file = views.get(view)
-        if not file:
-            continue
-        if sum(1 for item in refs if item['role']==asset['kind']) >= 3:
+    references = bible.get('references', [])
+    states = visual.view_states(version, references, asset['kind'], asset['id'], version['id'])
+    approved = [state for state in states if state['status']!='unapproved']
+    unapproved = [state for state in states if state['status']=='unapproved']
+    allow_unapproved = payload.get('allow_unapproved') is True
+    if states and not approved and not allow_unapproved:
+        raise ValueError('这个版本只有未批准的视图；请先在角色与素材中批准要用于生成的视图，或明确选择“使用未批准视图”')
+    use = approved + (unapproved if allow_unapproved else [])
+    refs, used = [], set()
+    for state in use:
+        if len(used) >= 3:
             break
+        file = state['file']
         digest = hashlib.sha256(media_path(file).read_bytes()).hexdigest()
-        approval = approved_views.get(view)
+        approval = state['approval']
         if approval and approval.get('sha256') and approval['sha256']!=digest:
             raise ValueError('已批准的参考图文件发生变化')
         refs.append(dict(file=file, role=asset['kind'], reference_id=digest,
-                         label=version['name']+' · '+visual.VIEW_LABELS.get(view,view),
-                         asset_id=asset['id'], version_id=version['id'], view=view))
-    style_refs = visual.approved_refs(bible.get('references', []), 'style')
+                         label=version['name']+' · '+visual.VIEW_LABELS.get(state['view'],state['view']),
+                         asset_id=asset['id'], version_id=version['id'], view=state['view'],
+                         status=state['status'], source=(approval or {}).get('source')))
+        used.add(state['view'])
+    excluded = [dict(view=state['view'], status=state['status'], label=state['label'],
+                     reason=('未批准，未进入本次请求' if state['status']=='unapproved'
+                             else '超出单次 3 张参考图上限'))
+                for state in states if state['view'] not in used]
+    style_refs = visual.approved_refs(references, 'style')
     style = style_refs[0][1] if style_refs else None
+    style_status = None
     if style:
         path = media_path(style['file'])
-        if style.get('sha256') and hashlib.sha256(path.read_bytes()).hexdigest()!=style['sha256']:
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        if style.get('sha256') and digest!=style['sha256']:
             raise ValueError('已批准的风格参考图文件发生变化')
-        refs.append(dict(file=style['file'], role='style',
-                         reference_id=hashlib.sha256(path.read_bytes()).hexdigest(),
+        style_status = 'approved' if style.get('sha256') else 'legacy'
+        refs.append(dict(file=style['file'], role='style', reference_id=digest,
                          label='作品统一画风', asset_id=style.get('asset_id'), version_id=style.get('version_id'),
-                         source=style.get('source'), view=style.get('view') or 'primary'))
-    if asset['kind']=='character':
-        prompt = ('生成一张电影级角色定妆参考：单人，四分之三角度，面部与服装清晰，简洁背景，柔和主光。'
-                  '参考图中的脸型、五官、发型、发色、肤色和服装必须保持一致。'
-                  '解剖结构准确，五官完整自然，皮肤与布料有真实质感；'
-                  '禁止低多边形、塑料感、简笔或动漫式简化五官、多余肢体、文字和水印。')
-    else:
-        prompt = ('生成一张电影级场景参考：展示地点布局、主要地标、建筑材质与主光方向，画内无人。'
-                  '参考图中的空间结构、地标和光线方向保持一致。'
-                  '透视与材质准确，细节层次清楚；禁止低多边形、塑料感、文字和水印。')
+                         source=style.get('source'), view=style.get('view') or 'primary', status=style_status))
+    art_style = art.resolve(p['creative_brief'])
+    prompt = f"生成一张{art_style['label']}风格的" + art.constraints(p['creative_brief'], asset['kind'])
     if style:
         prompt += '最后一张参考图仅用于统一绘制技法、色彩和光影，不改变人物或场景本身的结构。'
     prompt += f"素材：{version['name']}。{version.get('description','')}。"
@@ -825,11 +833,18 @@ def asset_image_packet(p, payload):
     if p['creative_brief']['style']:
         prompt += f"画风：{p['creative_brief']['style']}。"
     prompt += ''.join(f'{label}：{bible[key]}。' for key,label in visual.DIRECTION.items() if bible.get(key))
+    if allow_unapproved and any(ref['status']=='unapproved' for ref in refs):
+        prompt += '注意：本次生成包含尚未批准的视图，仅用于本次请求，不会自动成为正式参考。'
     prompt += instruction.strip()
     packet = dict(id='asset-'+asset['id'], asset_id=asset['id'],version_id=version['id'],kind='image',mode='asset',
                   instruction=prompt,user_instruction=instruction,model=domestic_media.FLASH,provider='ark',
                   parameters={'aspect_ratio':'9:16' if asset['kind']=='character' else p['creative_brief']['format']},
-                  references=refs)
+                  references=refs,art_style=art_style['key'],art_label=art_style['label'],
+                  approval=dict(used=[dict(view=ref['view'],status=ref['status'],label=visual.VIEW_LABELS.get(ref['view'],ref['view']))
+                                      for ref in refs if ref['role']!=style],
+                                excluded=excluded,allow_unapproved=allow_unapproved,
+                                requires_confirmation=bool(unapproved) and not allow_unapproved,
+                                style_status=style_status))
     packet['plan_digest']=production.digest(packet)
     return packet
 
@@ -907,9 +922,18 @@ def preview_job_quote(pid,kind,payload):
     if packet and packet['provider'] in domestic_media.KEYS:
         domestic_media.arguments('image' if kind=='asset_image' else kind,snapshot,media_path)
         quote.update(references=packet['references'],configured=bool(domestic_media.key(packet['provider'])))
+        if packet.get('approval'):
+            quote.update(approval=packet['approval'],
+                         excluded_references=packet['approval']['excluded'],
+                         requires_approval=packet['approval']['requires_confirmation'],
+                         approval_notice=('这个版本还有未批准的视图，它们不会进入本次模型请求。'
+                                          '如需使用，必须在报价中明确确认。'
+                                          if packet['approval']['requires_confirmation'] else ''),
+                         art_label=packet.get('art_label'))
     elif packet and packet['model']==fal_media.STORYBOARD:
         fal_media.arguments(kind,snapshot,media_path)
-        quote.update(references=packet['references'],configured=bool(fal_media.key()))
+        quote.update(references=packet['references'],configured=bool(fal_media.key()),
+                     art_label=packet.get('art_label'))
     if packet and packet.get('comparison_id'):
         quote.update(comparison_id=packet['comparison_id'], duration=packet['duration'],
                      resolution=packet['parameters']['resolution'])

@@ -19,6 +19,7 @@ VIEWS = {
 }
 VIEW_LABELS = {'primary': '设定图', 'front': '正面', 'three_quarter': '四分之三',
                'side': '侧面', 'back': '背面', 'wide': '全景', 'detail': '细节', 'reverse': '反打'}
+STATUS_LABELS = {'approved': '已批准', 'legacy': '旧版批准', 'unapproved': '未批准'}
 
 
 def view_of(version, file):
@@ -50,6 +51,34 @@ def approved_refs(references, role, asset_id=None, version_id=None, version=None
         items.append((order.get(view, len(order)), view, ref))
     items.sort(key=lambda item: item[0])
     return [(view, ref) for _, view, ref in items]
+
+
+def view_states(version, references, role, asset_id, version_id):
+    """Every view actually present in a version, with its approval state.
+
+    A view is `approved` only when an approval record for the same view and file
+    exists and carries a file digest. Rows saved before digests were introduced
+    stay usable as `legacy`; views without an approval record are always
+    `unapproved` and must never enter production silently.
+    """
+    files = {}
+    if version.get('file'):
+        files['primary'] = version['file']
+    files.update({view: file for view, file in (version.get('views') or {}).items() if file})
+    approved = dict(approved_refs(references, role, asset_id, version_id, version))
+    states = []
+    for view in allowed_views(role):
+        file = files.get(view)
+        if not file:
+            continue
+        ref = approved.get(view)
+        if ref and ref.get('file') == file:
+            status = 'approved' if ref.get('sha256') else 'legacy'
+        else:
+            ref, status = None, 'unapproved'
+        states.append(dict(view=view, file=file, label=VIEW_LABELS.get(view, view),
+                           status=status, status_label=STATUS_LABELS[status], approval=ref))
+    return states
 
 
 def validate_bible(brief, assets, media_path):
