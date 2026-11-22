@@ -59,10 +59,14 @@ function assetDialog(aid){
       <div class="row"><button class="btn small" id="look-save">另存为新造型版本</button><span class="faint">换造型会清空四视图，需要重新上传。</span></div>
       <div class="views">${Object.entries(VIEWS).map(([k,label])=>{const f=v.views?.[k];return `<button class="view-slot" data-view="${k}" style="${f?`background-image:url('${L.media(f)}')`:''}">${f?'':'＋'}<span>${label}</span></button>`}).join('')}</div>`
     :`<div class="row"><button class="btn small" id="ref-up">上传参考图，生成新版本</button>${v.file?`<a class="faint" href="${L.media(v.file)}" target="_blank" rel="noopener">查看当前参考图</a>`:''}</div>`}
+    ${['character','scene'].includes(a.kind)?'<button class="btn small" id="asset-images">生成参考与比较候选</button>':''}
     <div class="sub">版本（${a.versions.length}）</div>
     <div class="versions">${[...a.versions].reverse().map(x=>`<button data-vid="${esc(x.id)}" ${x.id===a.selected_version?'aria-current="true"':''}><span class="dot ${x.id===a.selected_version?'ok':''}"></span>${esc(x.label||'版本')}<span class="faint">${esc((x.outfit||x.description||'').slice(0,40))}</span><span class="spacer"></span><span class="faint">${x.created?L.timeAgo(x.created):'初始'}</span></button>`).join('')}</div>
     <p class="faint" style="margin:0">选用其他版本只影响之后新绑定的镜头；已有镜头在「镜头 › 素材」里单独更新。</p>`});
   const reopen=()=>{L.render();assetDialog(aid)};
+  $('#asset-images',m)?.addEventListener('click',e=>L.busy(e.currentTarget,async()=>{
+    m.close();await assetImages(p,a,v);
+  }));
   $('#e-save',m).onclick=e=>L.busy(e.currentTarget,async()=>{
     const name=$('#e-name',m).value.trim();if(!name)throw Error('名称不能为空');
     await L.save(p2=>{const x=p2.assets.find(y=>y.id===aid);x.name=name;x.description=$('#e-desc',m).value});L.toast('已保存');reopen();
@@ -86,6 +90,37 @@ function assetDialog(aid){
       await L.production('asset_version',{asset_id:aid,file,label:'参考图 '+(a.versions.length+1),description:$('#e-desc',m).value});L.toast('参考图已保存为新版本');reopen();
     });
   }
+}
+async function assetImages(project,asset,version){
+  const scope={project_id:project.id,asset_id:asset.id};
+  const items=await L.api('/api/assets/image-candidates',scope);
+  const dialog=L.modal({title:asset.name+' · 制作参考',wide:true,body:`
+    <label class="field"><span>画面要求</span><textarea data-instruction maxlength="2000" rows="3">${asset.kind==='character'?'四分之三角度，服装和脸部清晰，柔和光线，简洁背景。':'展示主要地标、空间布局与灯光方向，画内无人。'}</textarea></label>
+    <button class="btn small" data-quote>预览请求与费用</button>
+    <div class="grid2">${items.filter(item=>item.file&&item.state==='succeeded').map(item=>`
+      <figure><img src="${L.media(item.file)}" alt="${esc(asset.name)}参考候选" style="max-width:100%;max-height:32vh;object-fit:contain">
+      <figcaption>${item.approved?'已存入版本库':`<button class="btn small" data-approve="${esc(item.id)}">批准为新版本</button>`}</figcaption></figure>`).join('')}</div>`,
+    foot:'<button class="btn" data-close>关闭</button>'});
+  $('[data-quote]',dialog).onclick=e=>L.busy(e.currentTarget,async()=>{
+    const request={...scope,version_id:version.id,episode_id:L.S.eid,kind:'asset_image',instruction:$('[data-instruction]',dialog).value};
+    const quote=await L.api('/api/jobs/quote',request);
+    const enabled=quote.configured&&L.S.data.spending.remaining>=quote.authorization_calls;
+    dialog.close();
+    const confirm=L.modal({title:'确认制作参考',body:`<p>${esc(quote.model_label)} · ${esc(L.quoteCost(quote))}</p>
+      <p>${esc(quote.prompt||request.instruction)}</p>
+      ${quote.references.map(ref=>`<img style="max-width:100%;max-height:24vh;object-fit:contain" src="${L.media(ref.file)}" alt="${esc(ref.label)}">`).join('')}`,
+      foot:`<button class="btn" data-close>取消</button><button class="btn primary" data-send ${enabled?'':'disabled'}>确认费用并生成</button>`});
+    const nonce=crypto.randomUUID();
+    $('[data-send]',confirm).onclick=e=>L.busy(e.currentTarget,async()=>{
+      await L.api('/api/jobs',{...request,quote_digest:quote.digest,nonce});
+      confirm.close();await L.refresh();L.toast('已加入生成队列');L.openDrawer();
+    });
+  });
+  $$('[data-approve]',dialog).forEach(button=>button.onclick=e=>L.busy(e.currentTarget,async()=>{
+    if(!await L.confirmBox('批准这张参考图？','新版本进入素材库。可以在镜头页面指定它。','批准为新版本'))return;
+    const saved=await L.api('/api/assets/approve-image',{...scope,job_id:button.dataset.approve,revision:L.project().revision});
+    L.replaceProject(saved);dialog.close();L.render();L.toast('新版本已保存');
+  }));
 }
 L.assetDialog=assetDialog;
 })();

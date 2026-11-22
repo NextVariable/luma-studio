@@ -7,7 +7,8 @@ from . import continuity
 from . import domestic_media, fal_media
 
 # Only provider models with a documented input/output contract belong here.
-MODELS = {**fal_media.PROFILES, domestic_media.WAN: domestic_media.WAN_PROFILE}
+MODELS = {**fal_media.PROFILES, domestic_media.WAN: domestic_media.WAN_PROFILE,
+          domestic_media.HAILUO: domestic_media.HAILUO_PROFILE}
 MODES = {'image': ('text_to_image','reference_to_image'),
          'video': ('text_to_video','reference_to_video','image_to_video','start_end_frames')}
 ROLES = ('reference_image','first_frame','last_frame')
@@ -158,13 +159,16 @@ def report(p,sid,media_path,connected=None,profiles=None):
             params=seg['parameters']
             if seg['kind']!=profile.get('kind') or mode not in profile.get('modes',[]):error('模型不支持所选生成方式',sid2)
             if not profile.get('provider') or not profile.get('evidence'):error('模型能力缺少核实来源',sid2)
-            if profile.get('provider') in ('fal','dashscope') and any(r['source'] == 'shot_image' and r['file'] == s.get('image') for r in refs):
+            if profile.get('provider') in ('fal','dashscope','minimax') and any(r['source'] == 'shot_image' and r['file'] == s.get('image') for r in refs):
                 from .production import media_issue
                 if media_issue(s):error('本镜首帧来自修改前，请生成新图或确认沿用',sid2)
             limits=profile.get('duration',{})
             if seg['kind']=='video' and (not limits or not limits.get('min',0)<=duration<=limits.get('max',0)):error('片段时长超出模型范围',sid2)
             step=limits.get('step')
             if seg['kind']=='video' and step and abs((duration-limits.get('min',0))/step-round((duration-limits.get('min',0))/step))>.001:error('片段时长不符合模型步长',sid2)
+            combinations = profile.get('duration_resolution')
+            if combinations and [duration, params.get('resolution')] not in combinations:
+                error('时长和分辨率组合不受供应商支持',sid2)
             if params.get('resolution') not in profile.get('resolutions',[]):error('分辨率未获模型支持或尚未填写',sid2)
             if params.get('aspect_ratio') not in profile.get('aspect_ratios',[]):error('模型不支持作品画幅',sid2)
             if set(params)-set(profile.get('parameters',[])):error('模型不支持部分生成参数',sid2)

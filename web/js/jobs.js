@@ -50,6 +50,7 @@ function card(j,p){
   if(j.kind==='export'&&j.state==='succeeded')btns.push(`<button class="btn small" data-act="film" data-job="${esc(j.id)}">查看成片</button>`);
   if(['image','video','audio','assemble'].includes(j.kind)&&j.state==='succeeded'&&target)btns.push(`<button class="btn small" data-act="shot" data-job="${esc(j.id)}">去这一镜</button>`);
   if(L.canReconcile(j))btns.push(`<button class="btn small" data-act="reconcile" data-job="${esc(j.id)}">${L.parseResult(j).candidate_file?'恢复入库':'查询远程结果'}</button>`);
+  if(j.batch_id&&['queued','paused'].includes(j.state))btns.push(`<button class="btn small" data-act="${j.state==='queued'?'batch-pause':'batch-resume'}" data-job="${esc(j.id)}">${j.state==='queued'?'暂停此批待处理项':'继续此批'}</button>`);
   if(L.canCancel(j))btns.push(`<button class="btn small ghost danger" data-act="cancel" data-job="${esc(j.id)}">取消</button>`);
   return `<article class="job"><div class="job-top"><span class="dot ${tone}"></span><b>${esc(L.jobName(j.kind))}</b><span class="faint">${esc(L.jobState(j.state))}</span><time>${L.timeAgo(j.updated)}</time></div>
     ${(ep&&L.ui.jobScope==='all')||target?`<div class="faint">${ep&&L.ui.jobScope==='all'?esc(ep.title):''}${target?' '+esc(L.shotTitle(target)):''}</div>`:''}
@@ -76,6 +77,9 @@ async function act(b,p){
       L.toast('审批已提交，Dify 会继续执行');
     }
     if(kind==='reconcile'){await L.api('/api/reconcile',{project_id:p.id,job_id:j.id});L.toast(L.parseResult(j).candidate_file?'正在恢复入库':'正在查询远程结果，不会重复提交')}
+    if(kind==='batch-pause'||kind==='batch-resume'){
+      await L.api('/api/jobs/batch/state',{project_id:p.id,batch_id:j.batch_id,action:kind==='batch-pause'?'pause':'resume'});
+    }
     if(kind==='cancel'){
       if(!await L.confirmBox('取消这条任务？','本地会停止跟进；已经发出的外部调用可能仍在执行并计费。','取消任务',true))return;
       await L.api('/api/cancel',{id:j.id});L.toast('已取消');

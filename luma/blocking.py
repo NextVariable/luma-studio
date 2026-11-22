@@ -7,15 +7,19 @@ import zlib
 
 from . import production
 
-PRESETS = {"wide": (0, 7.8), "left": (18, 3.2), "right": (-18, 3.2)}
+PRESETS = {"wide": (0, 7.8), "left": (18, 3.2), "right": (-18, 3.2),
+           "over_left": (18, 3.2), "over_right": (-18, 3.2)}
+LIMITS = {"angle": (-55, 55), "distance": (1.8, 10), "height": (-0.8, 1.2), "offset": (-1, 1)}
 POSITIONS = ((-1.55, 0.1), (1.55, -0.1))
 
 
 def layout(project, shot):
     cast = {a["id"]: a for a in project["assets"] if a["kind"] == "character"}
     people = [cast[k] for k in shot["asset_ids"] if k in cast]
-    if len(people) != 2:
-        raise ValueError("双人机位需要为镜头绑定两名角色")
+    if not 1 <= len(people) <= 2:
+        raise ValueError("请为镜头绑定一至两名角色")
+    if len(people) == 1:
+        return [dict(id=people[0]["id"], name=people[0]["name"], x=0, z=0)]
     # Project asset order stays stable when two shots list the same actors in reverse.
     ids = {a["id"] for a in people}
     return [
@@ -39,6 +43,8 @@ def current_camera(shot, actors):
     speaker = next(
         (line.get("speaker_asset_id") for line in shot.get("lines") or []), None
     )
+    if len(actors) == 1:
+        return preset("left")
     if shot.get("framing") in ("大远景", "远景", "全景") or speaker not in {
         a["id"] for a in actors
     }:
@@ -46,8 +52,18 @@ def current_camera(shot, actors):
     return preset("left" if speaker == actors[0]["id"] else "right")
 
 
-def visible_slots(view):
-    return {"wide": (0, 1), "left": (0,), "right": (1,)}[view]
+def choices(actors):
+    return ('wide', 'left') if len(actors)==1 else tuple(PRESETS)
+
+
+def focus_slot(view):
+    return 1 if view in ('right','over_right') else 0
+
+
+def visible_slots(view, count=2):
+    if view in ('wide', 'over_left', 'over_right'):
+        return tuple(range(count))
+    return (focus_slot(view),)
 
 
 def composition_spec(view, framing, portrait):
@@ -55,28 +71,40 @@ def composition_spec(view, framing, portrait):
 
 
 def render(camera, actors, portrait=False, framing='中景'):
-    if not isinstance(camera, dict) or camera.get("view") not in PRESETS:
+    if not isinstance(camera, dict) or camera.get("view") not in choices(actors):
         raise ValueError("请选择有效机位")
-    for key, lo, hi in [("angle", -55, 55), ("distance", 1.8, 10)]:
-        value = camera.get(key)
+    if set(camera) - {'view', 'positions', 'gaze', *LIMITS}:
+        raise ValueError('机位包含未知参数')
+    for key, (lo, hi) in LIMITS.items():
+        value = camera.get(key, 0) if key in ('height','offset') else camera.get(key)
         if type(value) not in (int, float) or not lo <= value <= hi:
             raise ValueError("机位参数超出范围")
+    positions = camera.get('positions', {})
+    gaze = camera.get('gaze', {})
+    ids = {actor.get('id') for actor in actors}
+    if not isinstance(positions,dict) or not set(positions)<=ids or any(
+            not isinstance(pos, dict) or set(pos)!={'x','z'} or any(
+                type(n) not in (int,float) or not -3<=n<=3 for n in pos.values()) for pos in positions.values()):
+        raise ValueError('走位超出预演范围')
+    if not isinstance(gaze,dict) or not set(gaze)<=ids or any(v not in ('left','right') for v in gaze.values()):
+        raise ValueError('请选择有效的画内视线方向')
+    actors = [dict(actor, **positions.get(actor.get('id'), {})) for actor in actors]
     w, h = (540, 960) if portrait else (960, 540)
     rows = [
         bytearray(bytes((31 + y * 32 // h, 49 + y * 36 // h, 68 + y * 36 // h)) * w)
         for y in range(h)
     ]
     wide = camera["view"] == "wide"
-    target = {"wide": 0, "left": actors[0]["x"], "right": actors[1]["x"]}[
-        camera["view"]
-    ]
+    slot = focus_slot(camera['view'])
+    target = (sum(actor['x'] for actor in actors)/len(actors) if wide else actors[slot]['x']) + camera.get('offset',0)
     aim_y = 1.0 if wide else 1.46
     zoom = 1.0
     center_x = w / 2
     if not wide:
         zoom, aim_y = {"中近景": (1.25, 1.47), "近景": (1.5, 1.53),
                        "特写": (2, 1.62), "大特写": (2.5, 1.68)}.get(framing, (1, 1.36))
-        center_x = w * (0.42 if camera["view"] == "left" else 0.58)
+        center_x = w * (0.42 if slot==0 else 0.58)
+    aim_y += camera.get("height",0)
     yaw = math.radians(camera["angle"])
     co, si = math.cos(yaw), math.sin(yaw)
 
@@ -121,10 +149,10 @@ def render(camera, actors, portrait=False, framing='中景'):
     # A neutral floor conveys depth without supplying an unintended story location.
     polygon([(-40, 0, -14), (40, 0, -14), (40, 0, 15), (-40, 0, 15)], "425462")
     for n in sorted(
-        visible_slots(camera["view"]), key=lambda i: -transform((actors[i]["x"], 1, actors[i]["z"]))[2]
+        (range(len(actors)) if wide else (slot,)), key=lambda i: -transform((actors[i]["x"], 1, actors[i]["z"]))[2]
     ):
         x, z = actors[n]["x"], actors[n]["z"]
-        sign = 1 if n == 0 else -1
+        sign = 1 if gaze.get(actors[n].get("id"), "right" if n==0 else "left")=="right" else -1
 
         def shape(points, color, x=x, z=z, sign=sign):
             polygon([(x + sign * dx, y, z + dz) for dx, y, dz in points], color)
@@ -194,6 +222,13 @@ def render(camera, actors, portrait=False, framing='中景'):
             ],
             "443c40",
         )
+
+    if camera['view'].startswith('over_'):
+        # The foreground silhouette is a framing guide. The focus actor remains on their mark.
+        for y in range(h // 2, h):
+            length = int(w * min(.28, .09 + (y - h / 2) / h * .55))
+            edge = 0 if slot==1 else w-length
+            rows[y][edge*3:(edge+length)*3] = bytes.fromhex('202e39') * length
 
     def chunk(kind, data):
         return (

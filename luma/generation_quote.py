@@ -5,10 +5,15 @@ from . import domestic_media, fal_media
 from . import openai_direct
 
 
-def estimate(kind, provider, model=None, duration=None, instruction=''):
+def estimate(kind, provider, model=None, duration=None, instruction='', resolution=None):
     dollars = None
     calls = 1
     if model in domestic_media.PROVIDER and domestic_media.PROVIDER[model] == provider:
+        if model == domestic_media.HAILUO:
+            price = domestic_media.HAILUO_PRICES.get((duration, resolution))
+            return dict(provider=provider, model=model, duration=duration, resolution=resolution,
+                        estimated_cny=price, estimated_usd=None, authorization_calls=1,
+                        billing=f'预计 ¥{price}（人民币）' if price else '待确定时长和分辨率')
         yuan = Decimal(domestic_media.STILL_MODELS[model][1]) if model in domestic_media.STILL_MODELS else Decimal('0.15') * int(duration)
         return dict(provider=provider, model=model, duration=duration, estimated_cny=format(yuan,'.2f'),
                     estimated_usd=None, authorization_calls=1, billing=f'预计 ¥{yuan:.2f}（人民币）')

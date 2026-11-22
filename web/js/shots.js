@@ -43,7 +43,7 @@ L.views.shots=view=>{
       <section class="stage" id="stage">${stage(p,list,s,it)}</section>${shotPanel(p,s,it)}
     </div>
     <section class="reel" aria-label="镜头序列">
-      <div class="reel-head"><button class="btn small" id="rehearse">整集预演</button><span class="num">${list.length} 镜 ${L.clock(L.total(list))}</span><span class="num">${done} / ${list.length} 可交付</span><span class="faint swipe-hint">${L.mobilePaging()?'在画面上左右滑动切换镜头':'画面或镜头条上滚动切镜头'}</span><span class="spacer"></span>
+      <div class="reel-head"><button class="btn small" id="rehearse">整集预演</button><button class="btn small" id="batch-stills">批量分镜图</button><span class="num">${list.length} 镜 ${L.clock(L.total(list))}</span><span class="num">${done} / ${list.length} 可交付</span><span class="faint swipe-hint">${L.mobilePaging()?'在画面上左右滑动切换镜头':'画面或镜头条上滚动切镜头'}</span><span class="spacer"></span>
         <div class="filters" role="group" aria-label="筛选镜头">${[['all','全部'],['missing','缺画面'],['review','待处理'],['ready','可交付']].map(([k,v])=>`<button data-filter="${k}" aria-pressed="${L.ui.filter===k}">${v}</button>`).join('')}</div></div>
       <div class="strip" id="strip" role="listbox" aria-label="镜头">${list.map((x,i)=>{const st=L.shotState(x,item(x));
         return `<button class="shot ${visible.includes(x)?'':'dim'}" role="option" data-sid="${esc(x.id)}" ${x.id===s.id?'aria-current="true" aria-selected="true"':'aria-selected="false"'} style="width:${Math.max(84,Math.round(x.duration*28))}px" title="${esc(L.shotTitle(x,i)+' · '+st.label)}">${thumb(x)}<span class="dot ${st.tone}"></span><span class="lbl num">${String(i+1).padStart(2,'0')}</span></button>`}).join('')}
@@ -55,10 +55,35 @@ L.views.shots=view=>{
     if(L.S.dirty)throw Error('请先保存镜头修改，再预演本集');
     await L.openRehearsal();
   });
+  $('#batch-stills',view).onclick=e=>L.busy(e.currentTarget,()=>batchStills(p,list));
   bindStrip(view,list);
   $$('[data-filter]',view).forEach(b=>b.onclick=async()=>{if(!await L.leaveOk())return;L.ui.filter=b.dataset.filter;L.render()});
   bindParts(view,p,s,list,it);
 };
+function batchStills(project,shots){
+  if(L.S.dirty)throw Error('请先保存当前镜头');
+  const ready=shots.filter(shot=>shot.composition_reference&&!shot.locked);
+  if(!ready.length)throw Error('请先为镜头保存机位构图');
+  const dialog=L.modal({title:'批量分镜图',body:`<p>选择本次要制作的镜头，每镜生成一张候选。</p>
+    ${ready.map(shot=>`<label class="field"><span>${esc(L.shotTitle(shot,shots.indexOf(shot)))}</span><input type="checkbox" value="${esc(shot.id)}"></label>`).join('')}`,
+    foot:'<button class="btn" data-close>取消</button><button class="btn primary" data-quote>查看总价</button>'});
+  $('[data-quote]',dialog).onclick=e=>L.busy(e.currentTarget,async()=>{
+    const requests=$$('input:checked',dialog).map(input=>({shot_id:input.value,episode_id:L.S.eid,kind:'image',storyboard:true,
+      model:'doubao-seedream-5-0-flash-260915',storyboard_reference_mode:'image'}));
+    const body={project_id:project.id,requests};
+    const quote=await L.api('/api/jobs/batch/quote',body);
+    dialog.close();
+    const enabled=quote.quotes.every(item=>item.configured)&&L.S.data.spending.remaining>=quote.calls;
+    const summary=L.modal({title:'确认批次费用',body:`<p>${quote.calls} 张 · 预计 ¥${esc(quote.estimated_cny)}</p>
+      ${requests.map((request,i)=>`<p>${esc(L.shotTitle(shots.find(s=>s.id===request.shot_id),shots.findIndex(s=>s.id===request.shot_id)))} · ${esc(L.quoteCost(quote.quotes[i]))}</p>`).join('')}`,
+      foot:`<button class="btn" data-close>取消</button><button class="btn primary" data-submit ${enabled?'':'disabled'}>确认费用并加入队列</button>`});
+    const nonce=crypto.randomUUID();
+    $('[data-submit]',summary).onclick=e=>L.busy(e.currentTarget,async()=>{
+      await L.api('/api/jobs/batch/submit',{...body,digest:quote.digest,nonce});
+      summary.close();await L.refresh();L.openDrawer();
+    });
+  });
+}
 const POPS={settings:'镜头设置',dialogue:'对白',media:'素材',make:'制作准备'};
 
 /* 画面区与场记板的绑定；切换镜头时只重建这两块 */
@@ -123,12 +148,13 @@ function shotPanel(p,s,it){
 
 function stage(p,list,s,it){
   const st=L.shotState(s,it),i=list.indexOf(s),start=startOf(list,s),f=s.image||s.video;
+  const castCount=(s.asset_ids||[]).filter(id=>p.assets.some(a=>a.id===id&&a.kind==='character')).length;
   const lines=Array.isArray(s.lines)?s.lines.length:(s.dialogue?1:0);
   const takes=s.takes.filter(t=>t.kind!=='audio').length;
   return `${f?`<div class="stage-media">${mediaTag(f,{id:'stage-video'})}</div><div class="stage-shade"></div>`:`<div class="stage-glow lit" style="background:${L.glow(s.id)}"></div><div class="stage-empty"><h2>还没有画面</h2><p>导入一张图片或一段视频，作为这一镜的画面。</p><div class="row" style="justify-content:center;margin-top:16px"><button class="btn primary" data-pop="media">导入画面</button></div></div>`}
     <div class="stage-top"><span class="chip"><span class="dot ${st.tone}"></span>${esc(st.label)}</span>${s.locked?'<span class="chip">已锁定</span>':''}
       <span class="spacer"></span>
-      ${(s.asset_ids||[]).filter(id=>p.assets.some(a=>a.id===id&&a.kind==='character')).length===2?'<button class="chip tool" id="shot-camera">机位</button>':''}
+      ${castCount>0&&castCount<=2?'<button class="chip tool" id="shot-camera">机位</button>':''}
       ${s.composition_reference?'<button class="chip tool" id="storyboard-quote">正式分镜图</button>':''}
       <button class="chip tool ${L.ui.tab==='dialogue'?'on':''}" data-pop="dialogue">对白${lines?' '+lines:''}</button>
       <button class="chip tool ${L.ui.tab==='media'?'on':''}" data-pop="media">素材${takes?' '+takes:''}${it?.stale_media?'<span class="dot stop"></span>':''}</button>
@@ -344,7 +370,7 @@ function media(p,s,it){
   const sv=s.video&&s.takes.find(t=>t.id===sel.video);
   return `${it?.stale_media?`<div class="notice stop"><div class="grow"><b>画面来自修改前的镜头</b><p class="muted">镜头内容改过了。确认这张画面仍然适用，或者换一个新的。</p></div></div>
       <div class="row"><button class="btn primary small" id="keep-media" ${dis}>确认沿用</button><button class="btn small" id="swap-media" ${dis}>导入新画面</button></div>`:''}
-    <div class="row"><span class="sub" style="margin:0">画面候选（${visuals.length}）</span><span class="spacer"></span><button class="btn small" id="m-import" ${dis}>导入图片或视频</button></div>
+    <div class="row"><span class="sub" style="margin:0">画面候选（${visuals.length}）</span><span class="spacer"></span>${visuals.length?'<button class="btn small" id="compare-candidates">比较与复核</button>':''}<button class="btn small" id="m-import" ${dis}>导入图片或视频</button></div>
     ${visuals.length?`<div class="takes">${visuals.map(t=>{const on=sel[t.kind]===t.id,old=L.candidateOutdated(t,basis),part=L.isPartialTake(t,s);
       return `<button class="take" data-take="${esc(t.id)}" aria-pressed="${on}" ${dis||(part?'disabled':'')} title="${esc(t.label)}">${mediaTag(t.file)}<span class="tag">${on?'使用中':['import','blocking'].includes(t.source)?esc(t.label||'导入'):t.source==='assembly'?'拼接':'生成'}</span>${old?'<span class="warn">设定已变</span>':''}${part?'<span class="warn">局部片段</span>':''}</button>`}).join('')}</div>`
     :'<p class="faint" style="margin:0">还没有画面。导入一张图片或一段视频作为这一镜的画面。</p>'}
@@ -357,6 +383,7 @@ function media(p,s,it){
 function bindMedia(view,p,s,list,it){
   const importVisual=async()=>{const f=await L.pickFile('image/*,video/mp4,video/quicktime');if(!f)return;const file=await L.upload(f,'visual');const kind=L.isVideo(file)?'video':'image';
     await L.production('add_take',{shot_id:s.id,kind,file,label:f.name.slice(0,60)});const t=L.shot().takes.at(-1);await L.production('select_take',{shot_id:s.id,take_id:t.id});L.toast('画面已导入并选用');L.render()};
+  $('#compare-candidates',view)?.addEventListener('click',e=>L.busy(e.currentTarget,()=>compareCandidates(p,s)));
   $('#m-import',view).onclick=e=>L.busy(e.currentTarget,importVisual);
   $('#swap-media',view)?.addEventListener('click',e=>L.busy(e.currentTarget,importVisual));
   $('#keep-media',view)?.addEventListener('click',e=>L.busy(e.currentTarget,async()=>{await L.production('confirm_media',{shot_id:s.id});L.done('已确认沿用这张画面');L.render()}));
@@ -372,6 +399,44 @@ function bindMedia(view,p,s,list,it){
   }));
   $$('[data-bind-asset]',view).forEach(sel=>sel.onchange=()=>L.busy(null,async()=>{await L.production('bind_asset_version',{shot_id:s.id,asset_id:sel.dataset.bindAsset,version_id:sel.value});L.toast('已更换版本，这一镜需要重新确认');L.render()}));
   $('#bind-current',view)?.addEventListener('click',e=>L.busy(e.currentTarget,async()=>{await L.production('bind_current',{shot_id:s.id});L.toast('已更新为当前版本');L.render()}));
+}
+
+async function compareCandidates(project,shot){
+  const scope={project_id:project.id,shot_id:shot.id};
+  const {candidates}=await L.api('/api/quality/open',scope);
+  const options=candidates.map((item,i)=>`<option value="${i}">${esc(item.label)}${item.model?' · '+esc(item.model):''}</option>`).join('');
+  const dialog=L.modal({title:'比较与复核',wide:true,
+    body:`<div class="grid2">${[0,1].map(i=>`<section><label class="field"><span>候选 ${i+1}</span><select class="select" data-candidate="${i}">${options}</select></label><div data-comparison="${i}"></div></section>`).join('')}</div>`,
+    foot:'<button class="btn" data-close>关闭</button>'});
+  const selects=$$('[data-candidate]',dialog);
+  selects[1].value=String(candidates.length-1);
+  function show(select){
+    const item=candidates[+select.value], review=item.reviews.at(-1);
+    const node=$(`[data-comparison="${select.dataset.candidate}"]`,dialog);
+    const cost=item.actual_cny!=null?'实扣 ¥'+item.actual_cny:item.estimated_cny!=null?'报价 ¥'+item.estimated_cny:item.estimated_usd!=null?'报价 $'+item.estimated_usd:'';
+    node.innerHTML=`${mediaTag(item.file,{controls:true})}<p class="muted">${esc([cost,item.queue_to_result_seconds!=null?'入队至完成 '+item.queue_to_result_seconds+' 秒':'',item.selected?'已选用':''].filter(Boolean).join(' · '))}</p>
+      ${review?`<p>${review.matches_shot?'':'旧镜头设定 · '}${esc(review.notes)}</p>`:''}<button class="btn small" data-review-media>人工复核</button>
+      ${review&&review.matches_shot&&Object.values(review.structure).includes('fail')?'<button class="btn small" data-revise-reviewed>提出单镜修改</button>':''}`;
+    $('[data-revise-reviewed]',node)?.addEventListener('click',()=>{dialog.close();reviseDialog(shot,review.notes)});
+    $('[data-review-media]',node).onclick=e=>L.busy(e.currentTarget,async()=>{
+      const detail=await L.api('/api/quality/open',{...scope,take_id:item.id});
+      dialog.close();
+      const report=L.modal({title:item.label+' · 人工复核',body:`
+        ${mediaTag(item.file,{controls:true})}
+        <p class="muted">文件检查 · ${detail.evidence.width||'—'} × ${detail.evidence.height||'—'}</p>
+        ${Object.entries(detail.structure).map(([key,label])=>`<label class="field"><span>${esc(label)}</span><select data-structure="${esc(key)}"><option value="uncertain">不可判断</option><option value="pass">通过</option><option value="fail">需返工</option></select></label>`).join('')}
+        ${Object.entries(detail.scores).map(([key,label])=>`<label class="field"><span>${esc(label)}（1–5 分）</span><select data-score="${esc(key)}"><option value="">请选择</option>${[1,2,3,4,5].map(n=>`<option>${n}</option>`).join('')}</select></label>`).join('')}
+        <label class="field"><span>画面依据</span><textarea data-notes maxlength="3000"></textarea></label>`,
+        foot:'<button class="btn" data-close>取消</button><button class="btn primary" data-save-review>保存复核</button>'});
+      $('[data-save-review]',report).onclick=e=>L.busy(e.currentTarget,async()=>{
+        const structure=Object.fromEntries($$('[data-structure]',report).map(input=>[input.dataset.structure,input.value]));
+        const scores=Object.fromEntries($$('[data-score]',report).map(input=>[input.dataset.score,Number(input.value)]));
+        await L.api('/api/quality/record',{...scope,take_id:item.id,basis:detail.basis,structure,scores,notes:$('[data-notes]',report).value});
+        report.close();L.toast('已保存复核');await compareCandidates(project,shot);
+      });
+    });
+  }
+  selects.forEach(select=>{select.onchange=()=>show(select);show(select)});
 }
 
 /* 制作：制作准备、片段选用与本机拼接 */
@@ -454,6 +519,7 @@ async function bindMake(view,p,s){
         <details><summary>连接图片与视频服务</summary>
           <label class="field"><span>服务</span><select class="select" data-provider>
             <option value="ark">火山方舟 · Seedream${data.domestic_configured?.ark?'（已配置）':''}</option>
+            <option value="minimax">MiniMax · 海螺${data.domestic_configured?.minimax?'（已配置）':''}</option>
             <option value="dashscope">百炼北京 · Wan${data.domestic_configured?.dashscope?'（已配置）':''}</option>
             <option value="fal">fal${data.fal_configured?'（已配置）':''}</option></select></label>
           <label class="field"><span>API Key</span><input class="input" data-fal-key type="password" autocomplete="off"></label>
@@ -570,10 +636,10 @@ async function addShot(){
 }
 
 /* AI 改写这一镜 */
-async function reviseDialog(s){
+async function reviseDialog(s, initialNotes=''){
   if(!await L.needService('revision'))return;
   const m=L.modal({title:'AI 改写这一镜',body:`<p class="muted" style="margin:0">${esc(L.shotTitle(s))}</p>
-    <label class="field"><span>想怎么改</span><textarea class="textarea" id="rv-text" rows="5" maxlength="2000" placeholder="例如：改成近景，雨更大，她先沉默再开口。"></textarea></label>
+    <label class="field"><span>想怎么改</span><textarea class="textarea" id="rv-text" rows="5" maxlength="2000" placeholder="例如：改成近景，雨更大，她先沉默再开口。">${esc(initialNotes.slice(0,2000))}</textarea></label>
     <p class="faint" style="margin:0">AI 只改这一镜的文字设定，完成后会先给你看修改前后的差异，确认了才会应用。画面和音轨不会被替换。</p>`,
     foot:`<button class="btn ghost" data-close>取消</button><button class="btn primary" id="rv-ok"><span class="spark">✦</span>开始修改</button>`});
   $('#rv-ok',m).onclick=e=>L.busy(e.currentTarget,async()=>{

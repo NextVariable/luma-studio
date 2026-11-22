@@ -2,8 +2,8 @@
 (function(root){
 const L=root.L=root.L||{};
 
-L.JOB_NAMES={script:'剧本拆解',assets:'角色与场景建议',shots:'AI 分镜',revision:'AI 改写',image:'生成画面',video:'生成视频',audio:'生成配音',plan:'制作规划',qc:'质量检查',export:'导出成片',assemble:'拼接片段'};
-L.JOB_STATES={queued:'排队中',running:'进行中',submitting:'提交中',waiting_review:'等你审批',succeeded:'已完成',failed:'失败',interrupted:'已中断',cancelled:'已取消',blocked:'被阻断'};
+L.JOB_NAMES={script:'剧本拆解',assets:'角色与场景建议',shots:'AI 分镜',revision:'AI 改写',asset_image:'素材参考图',image:'生成画面',video:'生成视频',audio:'生成配音',plan:'制作规划',qc:'质量检查',export:'导出成片',assemble:'拼接片段'};
+L.JOB_STATES={queued:'排队中',paused:'已暂停',running:'进行中',submitting:'提交中',waiting_review:'等你审批',succeeded:'已完成',failed:'失败',interrupted:'已中断',cancelled:'已取消',blocked:'被阻断'};
 L.jobName=k=>L.JOB_NAMES[k]||k;
 L.jobState=s=>L.JOB_STATES[s]||s;
 L.jobTone=s=>({succeeded:'ok',waiting_review:'wait',failed:'stop',interrupted:'stop',blocked:'stop',queued:'run',running:'run',submitting:'run'}[s]||'');
@@ -48,16 +48,16 @@ L.linesFromDialogue=(dialogue,speaker=null)=>dialogue?.trim()?[{id:null,speaker_
 
 /* 生成记录 */
 L.jobsFor=(jobs,pid,eid,scope='episode')=>jobs.filter(j=>j.project_id===pid&&(scope==='all'||!j.episode_id||j.episode_id===eid));
-L.jobBucket=j=>L.jobActive(j.state)?'active':['waiting_review','failed','interrupted','blocked'].includes(j.state)?'attention':'done';
+L.jobBucket=j=>L.jobActive(j.state)?'active':['paused','waiting_review','failed','interrupted','blocked'].includes(j.state)?'attention':'done';
 L.films=(jobs,pid,eid)=>jobs.filter(j=>j.project_id===pid&&j.kind==='export'&&j.state==='succeeded'&&j.episode_id===eid&&j.result).map(j=>({job:j,result:JSON.parse(j.result)}));
 L.parseResult=j=>{try{return j.result?JSON.parse(j.result):{}}catch(e){return {}}};
 L.canAdopt=(j,p)=>j.state==='succeeded'&&L.ADOPTABLE.includes(j.kind)&&!(p?.applied||[]).includes(j.id);
 L.canReconcile=j=>{
   const r=L.parseResult(j);
   return ['interrupted','waiting_review','failed'].includes(j.state)&&Boolean(r.run_id||
-    (['image','video','audio'].includes(j.kind)&&(r.candidate_file||r.result?.url)));
+    (['image','asset_image','video','audio'].includes(j.kind)&&(r.candidate_file||r.result?.url)));
 };
-L.canCancel=j=>['queued','running','waiting_review'].includes(j.state);
+L.canCancel=j=>['queued','paused','waiting_review'].includes(j.state);
 
 /* 审批表单：工作室只支持不超过一个段落输入 */
 L.reviewSupport=form=>{

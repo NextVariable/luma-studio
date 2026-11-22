@@ -6,7 +6,7 @@ let scriptPanel='text';
 
 L.views.script=view=>{
   const p=L.project(),ep=L.episode(),r=L.ready(),brief=p.creative_brief||{format:'16:9',method:'mixed',style:''};
-  const direction={palette:'色彩与光线',wardrobe:'服装连续性',camera:'摄影与景别'};
+  const direction={palette:'色彩与光线',wardrobe:'服装连续性',camera:'摄影与景别',quality:'美术质量要求',continuity:'跨镜头一致性',landmarks:'场景地标与主光'};
   const words=t=>t.replace(/\s/g,'').length;
   const cont=r?.continuity;
   view.innerHTML=`<div class="desk" data-script-panel="${scriptPanel}">
@@ -21,6 +21,7 @@ L.views.script=view=>{
       <textarea class="script-text" id="script" data-scroll="script-text" data-track maxlength="100000" placeholder="写下这一集的故事、场景和对白。写好后可以让 AI 拆成分镜。">${esc(ep.script||'')}</textarea>
       <div class="script-foot"><span class="faint" id="save-state">已保存</span><span class="spacer"></span>
         <button class="btn" id="save-script">保存剧本</button>
+        ${L.S.data.dify.script?'<button class="btn" id="analyze-script">拆解角色与场景</button>':''}
         <button class="btn ${L.S.data.dify.shots?'primary':''}" id="split"><span class="spark">✦</span>AI 拆分镜头${L.S.data.dify.shots?'':'（未连接）'}</button></div>
     </section>
     <aside class="side-stack script-tools" id="script-tools" data-scroll="script-tools" aria-label="剧集和创作设定" tabindex="0">
@@ -54,6 +55,12 @@ L.views.script=view=>{
   const persist=()=>L.save(p2=>{const e=p2.episodes.find(x=>x.id===ep.id);e.script=ta.value;if(p2.episodes.length===1)p2.script=ta.value});
   $('#save-script',view).onclick=e=>L.busy(e.currentTarget,async()=>{await persist();L.toast('剧本已保存');L.render()});
   ta.addEventListener('keydown',e=>{if((e.metaKey||e.ctrlKey)&&e.key==='s'){e.preventDefault();$('#save-script',view).click()}});
+  $('#analyze-script',view)?.addEventListener('click',e=>L.busy(e.currentTarget,async()=>{
+    if(!ta.value.trim())throw Error('请先写下本集剧本');
+    if(ta.value!==(ep.script||''))await persist();
+    const id=await L.run('script',{episode_id:L.S.eid});
+    if(id){L.toast('已开始拆解剧本，完成后可在生成记录中查看');L.openDrawer()}
+  }));
   $('#split',view).onclick=e=>L.busy(e.currentTarget,async()=>{
     if(!ta.value.trim())throw Error('先写下这一集的剧本，再拆分镜头');
     if(ta.value!==(ep.script||''))await persist();
