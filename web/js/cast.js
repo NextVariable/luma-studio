@@ -47,7 +47,7 @@ function assetDialog(aid){
   const p=L.project(),a=p.assets.find(x=>x.id===aid);if(!a)return;
   const v=current(a),isChar=a.kind==='character';
   const ref=picOf(a), approvals=p.creative_brief?.visual_bible?.references||[];
-  const approvedVersions=new Set(approvals.filter(r=>r.asset_id===aid).map(r=>r.version_id));
+  const approvedVersions=new Set(approvals.filter(r=>r.asset_id===aid&&r.role===a.kind).map(r=>r.version_id));
   const versionUses={};p.shots.forEach(s=>{const vid=(s.asset_bindings||{})[aid];if(vid)versionUses[vid]=(versionUses[vid]||0)+1});
   const eligible=ref&&['character','scene','style'].includes(a.kind);
   const active=approvals.find(r=>r.asset_id===aid&&r.version_id===v.id&&r.file===ref);

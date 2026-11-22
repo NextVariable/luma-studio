@@ -484,7 +484,8 @@ async function basicProduction(box,p,s){
       ${director.image?.blocked?`<p class="faint" style="margin:4px 0 0">构图图分镜：${esc(director.image.blocked)}</p>`:''}</div>
     <div><b>3. 看候选并记录复核</b><div class="row">
       <button class="btn small" data-guide-review ${s.takes.some(t=>t.kind!=='audio')?'':'disabled'}>比较候选</button>
-      <button class="btn small" data-guide-video ${s.image?'':'disabled'}>Wan／海螺对照</button></div></div>
+      <button class="btn small" data-guide-video ${s.image?'':'disabled'}>Wan／海螺对照</button></div>
+      <p class="faint" style="margin:4px 0 0">${s.takes.some(t=>t.kind!=='audio')?`${s.takes.filter(t=>t.kind!=='audio').length} 个候选${s.image?' · 已采用首帧':''}${s.video?' · 已采用视频':''}`:'还没有画面候选'}</p></div>
     <div><b>4. 配音、字幕和导出</b><div class="row">
       <button class="btn small" data-guide-dialogue>编辑对白</button>
       <button class="btn small" data-guide-delivery>检查交付</button></div></div></div>`;
