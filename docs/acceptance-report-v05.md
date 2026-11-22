@@ -1,6 +1,6 @@
 # Luma Studio V0.5 产品验收报告
 
-日期：2026-11-22  
+日期：2026-11-22
 分支：`dev/trae-luma-v05`  
 对照基线：`origin/main` = `6e20c1ad0e730b7dfab078fe14cb70b848d85dfc`  
 本报告只记录已经实际执行或可复现的证据；未执行的真实付费调用和人工画质评审单独标注。
@@ -81,12 +81,11 @@
 
 ## 5. 交付状态
 
-- 分支：`dev/trae-luma-v05`，HEAD `5522b84`。
-- 变更文件（相对 `6e20c1a`）：20 个，约 +1073 / -62 行。
-- 推送：上一轮 `git push` 返回 `403 Permission to NextVariable/luma-studio.git denied to NextVariable`；本轮再次推送被本地执行策略拦截，未产生新的远端提交。
-- PR：未创建，无 PR URL。不得声称已创建。
-- 建议 PR 标题：`Luma Studio V0.5: multi-view approved references and style-guided asset generation`
-- 建议 PR 正文：
+- 分支：`dev/trae-luma-v05`；V0.5.1 起点 `9a0de59`。
+- 变更文件（相对 `6e20c1a`）：以 `git diff --stat` 为准。
+- PR #5 已创建（base `main`），V0.5.1 完成后更新同一 PR；未合并 `main`。
+- 历史建议标题：`Luma Studio V0.5: multi-view approved references and style-guided asset generation`
+- 历史建议正文（V0.5 初版，现行正文以 PR #5 为准）：
 
 ```text
 ## Summary
@@ -112,3 +111,31 @@
 3. `luma/domestic_media.py` 的参考顺序契约是否与真实 Seedream API 行为一致。
 4. `web/js/cast.js` 的逐视图批准与场景视图上传是否存在状态遗漏。
 5. 任何将模拟或界面验证误写成真实生产验证的表述。
+
+## 7. V0.5.1 增量验收
+
+日期：2026-11-22
+起点：`9a0de59`（PR #5 原 Head）
+
+### 已修复
+
+- **P0 参考图越权**：`asset_image_packet` 不再把同版本未批准视图放进模型请求；默认只使用已批准/旧版批准视图。存在视图但无批准时会阻塞；使用未批准视图必须显式确认，并返回 `approval.excluded`、`requires_approval` 与报价预览。
+- **P0 分镜参考**：`storyboard_packet` 不再回退到未批准主图；有图无批准时给出“去批准参考”的可操作错误。
+- **P0 版本语义**：新版本不继承旧版本批准；选用/恢复版本不改变镜头绑定；界面显示批准数、视图数、绑定镜数；新增视图前确认“创建新版本、批准不继承、绑定不变”。
+- **P0 风格感知**：新增 `luma/art.py`，区分二维动画/赛璐璐、国漫插画、电影写实、自定义；动画不再被强制要求真实皮肤或摄影级写实；风格信息进入资产、分镜与图生视频提示。
+- **P1 证据**：候选与交付页显示证据类别、模型、请求号、估价/实扣、人工评分与采用状态；明确“供应商记录”不等于真实 API 验收，缺失 job 标为无供应商记录。
+- **P1 返工**：回归确认单镜返工只修改目标镜头；基础模式提示作用范围并提供受阻时的批准入口。
+
+### 测试证据
+
+- Python：`431 passed`（新增 15 项：批准门禁 5、风格 6、版本/返工/证据 4）。
+- JavaScript：`23 passed`。
+- Ruff：`All checks passed!`。
+- 浏览器：项目加载、5 项美术风格选择、资产版本 `1/1 已批准` 与绑定数、基础制作步骤可见；无控制台错误。
+- 未执行真实付费 Seedream / Wan / MiniMax / Dify；未做人工成片画质评审。
+
+### 仍需验收
+
+- 真实多视图定妆、动画风格成片、角色一致性与场景连续性。
+- 真实供应商账单与实际费用核对。
+- 新用户完整任务、移动端与长项目体验。
