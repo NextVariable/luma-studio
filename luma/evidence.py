@@ -11,7 +11,7 @@ DISCLAIMER = ('“供应商记录”只表示任务保存了请求号或运行�
 
 def classify(take, receipt):
     """Local imports are certain; provider records are only as good as their request id."""
-    if take.get('source') in ('import', 'local', 'local-assembly'):
+    if take.get('source') in ('import', 'local', 'local-assembly', 'assembly', 'blocking'):
         return 'local'
     if receipt.get('provider_request_id') or receipt.get('run_id'):
         return 'provider'

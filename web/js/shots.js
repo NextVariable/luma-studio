@@ -414,9 +414,12 @@ async function compareCandidates(project,shot){
     const item=candidates[+select.value], review=item.reviews.at(-1);
     const node=$(`[data-comparison="${select.dataset.candidate}"]`,dialog);
     const cost=item.actual_cny!=null?'实扣 ¥'+item.actual_cny:item.estimated_cny!=null?'报价 ¥'+item.estimated_cny:item.estimated_usd!=null?'报价 $'+item.estimated_usd:'';
-    node.innerHTML=`${mediaTag(item.file,{controls:true})}<p class="muted">${esc([cost,item.execution_seconds!=null?'提交至入库 '+item.execution_seconds+' 秒':item.queue_to_result_seconds!=null?'入队至完成 '+item.queue_to_result_seconds+' 秒':'',item.selected?'已选用':''].filter(Boolean).join(' · '))}</p>
+    const source={local:'本机文件',provider:'供应商有请求记录',provider_recorded:'供应商有请求记录',provider_unrecorded:'无供应商记录'}[item.evidence_class]||item.evidence_class;
+    const scores=review?.scores?Object.values(review.scores).filter(n=>Number.isFinite(n)):[];
+    node.innerHTML=`${mediaTag(item.file,{controls:true})}<p class="muted">${esc([item.model,item.provider,source,item.request_id?'请求号 '+String(item.request_id).slice(0,18):'',cost,item.execution_seconds!=null?'提交至入库 '+item.execution_seconds+' 秒':item.queue_to_result_seconds!=null?'入队至完成 '+item.queue_to_result_seconds+' 秒':'',item.selected?'已选用':'',scores.length?'人工评分 '+(scores.reduce((a,b)=>a+b,0)/scores.length).toFixed(1)+'/5':''].filter(Boolean).join(' · '))}</p>
+      <p class="faint" style="margin:0">离线或模拟记录不能作为真实 API 验收；真实费用与成片质量须以供应商账单和实际输出为准。</p>
       ${review?`<p>${review.matches_shot?'':'旧镜头设定 · '}${esc(review.notes)}</p>`:''}<button class="btn small" data-review-media>人工复核</button>
-      ${review&&review.matches_shot&&Object.values(review.structure).includes('fail')?'<button class="btn small" data-revise-reviewed>提出单镜修改</button>':''}`;
+      ${review&&review.matches_shot&&Object.values(review.structure).includes('fail')?'<button class="btn small" data-revise-reviewed>提出单镜修改（只影响这一镜）</button>':''}`;
     $('[data-revise-reviewed]',node)?.addEventListener('click',()=>{dialog.close();reviseDialog(shot,review.notes)});
     $('[data-review-media]',node).onclick=e=>L.busy(e.currentTarget,async()=>{
       const detail=await L.api('/api/quality/open',{...scope,take_id:item.id});
@@ -475,10 +478,10 @@ async function basicProduction(box,p,s){
   const approved=decision.references?.filter(r=>r.status==='approved')||[];
   const hasStyle=decision.references?.some(r=>r.role==='style');
   box.innerHTML=`<div class="side-stack">
-    <div><b>1. 检查人物和场景</b>
-      ${decision.blocked?`<p class="muted">${esc(decision.blocked)}</p>`:
-        decision.references.map(r=>`<p class="muted">${esc(r.label)} · ${esc(r.reason)}${r.status==='legacy'?' · 待确认参考图':''}</p>`).join('')}
-      <p class="faint" style="margin:4px 0 0">参考就绪：${approved.length} 张已批准${approvals.length?` · ${approvals.length} 张待批准`:''}${hasStyle?' · 已设画风参考':' · 未设作品画风'}</p>
+    <div><b>1. 检查人物和场景 ${decision.blocked?'（待处理）':approved.length?'（就绪）':''}</b>
+      ${decision.blocked?`<p class="muted">${esc(decision.blocked)}</p><button class="btn small" data-guide-approve>去批准参考图</button>`:
+        decision.references.map(r=>`<p class="muted">${esc(r.label)} · ${esc(r.reason)}${r.status==='legacy'?' · 旧版批准（无文件校验）':''}</p>`).join('')}
+      <p class="faint" style="margin:4px 0 0">参考就绪：${approved.length} 张已批准${approvals.length?` · ${approvals.length} 张旧版批准`:''}${hasStyle?' · 已设画风参考':' · 未设作品画风'}</p>
       <button class="btn small" data-guide-assets>检查角色、场景与画风</button></div>
     <div><b>2. 定机位并生成分镜</b><div class="row">
       <button class="btn small" data-guide-camera>调整机位</button>
@@ -489,12 +492,17 @@ async function basicProduction(box,p,s){
       <button class="btn small" data-guide-review ${s.takes.some(t=>t.kind!=='audio')?'':'disabled'}>比较候选</button>
       <button class="btn small" data-guide-video ${s.image?'':'disabled'}>Wan／海螺对照</button>
       <button class="btn small" data-guide-revise ${s.takes.some(t=>t.kind!=='audio')?'':'disabled'}>单镜返工</button></div>
-      <p class="faint" style="margin:4px 0 0">${s.takes.some(t=>t.kind!=='audio')?`${s.takes.filter(t=>t.kind!=='audio').length} 个候选${s.image?' · 已采用首帧':''}${s.video?' · 已采用视频':''}`:'还没有画面候选'}</p></div>
+      <p class="faint" style="margin:4px 0 0">${s.takes.some(t=>t.kind!=='audio')?`${s.takes.filter(t=>t.kind!=='audio').length} 个候选${s.image?' · 已采用首帧':''}${s.video?' · 已采用视频':''}`:'还没有画面候选'} · 生成和返工只作用于这一镜</p></div>
     <div><b>4. 配音、字幕和导出</b><div class="row">
       <button class="btn small" data-guide-dialogue>编辑对白</button>
       <button class="btn small" data-guide-delivery>检查交付</button></div></div></div>`;
   const prepare=(selector,action)=>{const button=$(selector,box);if(button)button.onclick=e=>L.busy(e.currentTarget,action)};
   prepare('[data-guide-assets]',()=>L.go('cast'));
+  prepare('[data-guide-approve]',()=>{
+    const candidates=s.asset_ids.map(id=>p.assets.find(a=>a.id===id)).filter(Boolean);
+    const target=candidates.find(a=>a.kind==='character')||candidates[0];
+    if(target)L.assetDialog(target.id);else L.go('cast');
+  });
   prepare('[data-guide-camera]',()=>L.shotCamera(s));
   prepare('[data-guide-image]',()=>L.storyboardQuote(s.id,undefined,'image'));
   prepare('[data-guide-image-text]',()=>L.storyboardQuote(s.id,undefined,'text'));

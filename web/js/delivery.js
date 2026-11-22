@@ -75,6 +75,7 @@ async function evidenceDialog(projectId){
     <td style="${cell}">${item.selected?'<span class="chip">已采用</span>':''}</td></tr>`).join('');
   const m=L.modal({title:'制作证据',wide:true,body:`
     <p class="faint" style="margin-top:0">${esc(report.disclaimer)}</p>
+    <p class="faint" style="margin-top:0">“供应商记录”只表示本机保存了请求号，不等同于真实 API 成片验收；模拟或离线响应不会自动升级为已验证生成。</p>
     <div class="row wrap"><span class="chip">${s.shots} 镜</span><span class="chip">${s.shots_with_visual} 有画面</span>
       <span class="chip">${s.shots_reviewed} 已人工复核</span><span class="chip">${s.provider} 供应商记录</span>
       <span class="chip">${s.local} 本机导入</span><span class="chip">${s.provider_unrecorded} 记录缺失</span>

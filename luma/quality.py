@@ -4,6 +4,7 @@ import json
 import time
 
 from . import continuity
+from . import evidence
 
 STRUCTURE = {
     'cast': '人数与身份', 'wardrobe': '服装', 'gaze': '视线与站位',
@@ -27,14 +28,18 @@ def candidates(db, project, shot):
         if kind not in ('image', 'video'):
             continue
         job = jobs.get(take.get('job_id'))
-        quote, receipt = {}, {}
+        payload, quote, receipt = {}, {}, {}
         elapsed = None
         if job:
-            quote = json.loads(job['payload']).get('quote', {})
+            payload = json.loads(job['payload']) or {}
+            quote = payload.get('quote', {})
             receipt = json.loads(job['result'] or '{}')
             elapsed = max(0, round(job['updated'] - job['created']))
+        provider = payload.get('provider') if isinstance(payload.get('provider'), dict) else {}
         rows.append(dict(id=take['id'], file=take['file'], label=take['label'], kind=kind,
-                         model=take.get('model') or quote.get('model'), provider=take['source'],
+                         model=take.get('model') or quote.get('model'),
+                         provider=provider.get('provider') or take['source'], source=take['source'],
+                         evidence_class=evidence.classify(take, receipt), verified=False,
                          selected=shot.get('selected_takes', {}).get(kind)==take['id'],
                          estimated_cny=quote.get('estimated_cny'), estimated_usd=quote.get('estimated_usd'),
                          actual_cny=receipt.get('actual_cny'), billing_status=receipt.get('billing_status'),
