@@ -51,7 +51,7 @@ function card(j,p){
   if(['image','video','audio','assemble'].includes(j.kind)&&j.state==='succeeded'&&target)btns.push(`<button class="btn small" data-act="shot" data-job="${esc(j.id)}">去这一镜</button>`);
   if(L.canReconcile(j))btns.push(`<button class="btn small" data-act="reconcile" data-job="${esc(j.id)}">${L.parseResult(j).candidate_file?'恢复入库':'查询远程结果'}</button>`);
   if(j.batch_id&&['queued','paused'].includes(j.state))btns.push(`<button class="btn small" data-act="${j.state==='queued'?'batch-pause':'batch-resume'}" data-job="${esc(j.id)}">${j.state==='queued'?'暂停此批待处理项':'继续此批'}</button>`);
-  if(['succeeded','failed'].includes(j.state)&&(r.provider_request_id||r.run_id||r.submission_started_at)&&j.provider)
+  if(['succeeded','failed','interrupted'].includes(j.state)&&(r.provider_request_id||r.run_id||r.submission_started_at)&&j.provider)
     btns.push(`<button class="btn small" data-act="bill" data-job="${esc(j.id)}">记账</button>`);
   if(j.generation_unit&&j.provider)extra+=`<details><summary>请求与费用证据</summary>
     <p>${esc(j.provider.model||'')}${r.provider_request_id?' · 请求 '+esc(r.provider_request_id):''}${r.run_id?' · 任务 '+esc(r.run_id):''}</p>

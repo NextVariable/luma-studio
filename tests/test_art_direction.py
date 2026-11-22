@@ -39,12 +39,12 @@ class ArtDirectionTests(TestCase):
         return studio.asset_image_packet(p, dict(asset_id=char['id'], version_id=char['selected_version'],
                                                  instruction='保持构图'))
 
-    def test_explicit_style_wins_and_empty_style_defaults_to_cinematic(self):
+    def test_explicit_style_wins_and_empty_style_uses_neutral_constraints(self):
         self.assertEqual(art.resolve(dict(art_style='anime', style='电影写实'))['key'], 'anime')
         self.assertEqual(art.resolve(dict(style='赛璐璐动画，冷色夜景'))['key'], 'anime')
         self.assertEqual(art.resolve(dict(style='国漫插画，厚涂'))['key'], 'comic')
         self.assertEqual(art.resolve(dict(style='实拍电影，低饱和'))['key'], 'cinematic')
-        self.assertEqual(art.resolve(dict(style=''))['key'], 'cinematic')
+        self.assertEqual(art.resolve(dict(style=''))['key'], 'custom')
         self.assertEqual(art.resolve(dict(style='水墨留白，宣纸质感'))['key'], 'custom')
 
     def test_anime_prompt_never_demands_photoreal_skin(self):

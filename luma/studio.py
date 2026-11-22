@@ -5,7 +5,7 @@ from contextlib import nullcontext
 from decimal import Decimal
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, unquote
-from .providers import Dify, PROVIDERS, encode_context, key_for, key_env_for, provider_identity, UncertainRun
+from .providers import Dify, PROVIDERS, encode_context, key_for, key_env_for, provider_identity, RemoteTaskFailed, UncertainRun
 from .contracts import validate
 from .episodes import normalize_project, validate_episodes, changed_episodes, production_snapshot
 from . import production
@@ -102,15 +102,24 @@ def validate_project(p):
         for field in ('video','audio'):
             if s.get(field): media_path(s[field])
 
-def save(p, expected, candidate_only=False, state_confirmation=None, source_confirmation=False, media_confirmation=None):
+def save(p, expected, candidate_only=False, state_confirmation=None, source_confirmation=False, media_confirmation=None,
+         reference_actions_only=False):
     submitted={s['id']:copy.deepcopy(s) for s in p['shots']}
     production.normalize(normalize_project(p))
     validate_project(p)
     with LOCK, connect() as c:
+        c.execute('BEGIN IMMEDIATE')
         old=c.execute('SELECT body FROM projects WHERE id=?',(p['id'],)).fetchone()
+        previous_refs=[]
         if old:
             old=production.normalize(normalize_project(json.loads(old['body'])))
             if old['revision'] != expected: raise ValueError('作品已更新，请刷新后再编辑')
+            previous_refs=(old['creative_brief'].get('visual_bible') or {}).get('references',[])
+            if reference_actions_only:
+                bible=p['creative_brief'].get('visual_bible')
+                incoming_refs=bible.get('references',[]) if isinstance(bible,dict) else []
+                if incoming_refs!=previous_refs:
+                    raise ValueError('请在素材中使用批准或替换参考图操作')
             oldshots={s['id']:s for s in old['shots']}
             for s in p['shots']:creative.synchronize(s,oldshots.get(s['id']))
             production.preserve_history(old,p)
@@ -167,7 +176,7 @@ def save(p, expected, candidate_only=False, state_confirmation=None, source_conf
                 issue=preparation.current_issue(p,s) or production.media_issue(s)
                 if issue:raise ValueError(issue)
         validate_project(p)
-        production.validate(p,media_path)
+        production.validate(p,media_path,previous_refs)
         creative.validate(p)
         originals={s['id']:s for s in (old or {}).get('shots',[])}
         for s in p['shots']:
@@ -519,7 +528,8 @@ def edit_production(body):
                 if a['kind'] not in ('character','scene'):raise ValueError('只有角色或场景可以添加视图')
                 view=body.get('view')
                 if view not in visual.allowed_views(a['kind']) or view=='primary':raise ValueError('视图类型无效')
-                file=body.get('file');media_path(file)
+                file=body.get('file')
+                visual.image_mime(visual.read_image(media_path(file)))
                 current=next(v for v in a['versions'] if v['id']==a['selected_version'])
                 v={**copy.deepcopy(current),'id':uid(),'created':time.time(),'name':a['name'],
                    'description':body.get('description',a.get('description','')),
@@ -623,10 +633,13 @@ def discard_upload(name):
     """Remove a just-uploaded file the user rejected; never touches media any project or version refers to."""
     path=media_path(name)
     with LOCK,connect() as c:
+        c.execute('BEGIN IMMEDIATE')
         bodies=[r[0] for r in c.execute('SELECT body FROM projects')]+[r[0] for r in c.execute('SELECT body FROM versions')]
-        jobs=[r[0] or '' for r in c.execute('SELECT result FROM jobs')]
-    if any(json.dumps(name) in b for b in bodies) or any(json.dumps(name) in j for j in jobs):raise ValueError('这个文件已被作品使用，不能删除')
-    path.unlink()
+        jobs=[value for row in c.execute('SELECT payload,result FROM jobs') for value in row if value]
+        if any(token in body for body in bodies+jobs
+               for token in {json.dumps(name),json.dumps(name,ensure_ascii=False)}):
+            raise ValueError('这个文件已被作品使用，不能删除')
+        path.unlink()
     return {'discarded':name}
 
 def storyboard_packet(p,sid,model=fal_media.STORYBOARD, *, reference_mode='image'):
@@ -665,10 +678,8 @@ def storyboard_packet(p,sid,model=fal_media.STORYBOARD, *, reference_mode='image
 
     def add_reference(role, file, label):
         path = media_path(file)
-        if path.stat().st_size > 8*1024*1024:
-            raise ValueError(f'{label}超过 8 MB')
         refs.append(dict(role=role, file=file, label=label,
-                         reference_id=hashlib.sha256(path.read_bytes()).hexdigest()))
+                         reference_id=hashlib.sha256(visual.read_image(path)).hexdigest()))
 
     over = view.startswith('over_')
     if over:
@@ -720,7 +731,7 @@ def storyboard_packet(p,sid,model=fal_media.STORYBOARD, *, reference_mode='image
             if approval.get('sha256') and refs[-1]['reference_id']!=approval['sha256']:
                 raise ValueError('已批准的场景参考图文件发生变化')
             refs[-1].update({k: approval[k] for k in ('asset_id', 'version_id', 'source')},
-                            view=pick_view, status='approved')
+                            view=pick_view, status='approved' if approval.get('sha256') else 'legacy')
             instructions.append(f'图{len(refs)}仅用于场景布局、建筑与环境灯光。')
     if reference_mode == 'image':
         add_reference('composition', ref['file'], '机位构图')
@@ -738,18 +749,15 @@ def storyboard_packet(p,sid,model=fal_media.STORYBOARD, *, reference_mode='image
             instructions.append('完整呈现主体及其周围环境，保留头顶和脚下空间。')
         else:
             instructions.append('完整呈现两人及其间距，左侧人物看画右，右侧人物看画左。')
-    style_refs = visual.approved_refs(approvals, 'style')
-    style_ref = style_refs[0][1] if style_refs else None
+    style_ref = visual.style_reference(approvals,p['assets'])
     if ark and style_ref:
         add_reference('style', style_ref['file'], '画风参考')
         if style_ref.get('sha256') and refs[-1]['reference_id']!=style_ref['sha256']:
             raise ValueError('已批准的风格参考图文件发生变化')
         refs[-1].update({k: style_ref[k] for k in ('asset_id', 'version_id', 'source')},
-                        view=style_ref.get('view') or 'primary', status='approved')
+                        view=style_ref.get('view') or 'primary', status='approved' if style_ref.get('sha256') else 'legacy')
         instructions.append(f'图{len(refs)}仅用于绘制技法、光影、色彩和细节层次。')
     instructions.append(f"镜头：{s['description']}。")
-    if p['creative_brief']['style']:
-        instructions.append(f"画风：{p['creative_brief']['style']}。")
     instructions.append(art.constraints(p['creative_brief']))
     style = art.resolve(p['creative_brief'])
     for key, label in visual.DIRECTION.items():
@@ -798,7 +806,7 @@ def asset_image_packet(p, payload):
         if len(used) >= 3:
             break
         file = state['file']
-        digest = hashlib.sha256(media_path(file).read_bytes()).hexdigest()
+        digest = hashlib.sha256(visual.read_image(media_path(file))).hexdigest()
         approval = state['approval']
         if approval and approval.get('sha256') and approval['sha256']!=digest:
             raise ValueError('已批准的参考图文件发生变化')
@@ -808,15 +816,14 @@ def asset_image_packet(p, payload):
                          status=state['status'], source=(approval or {}).get('source')))
         used.add(state['view'])
     excluded = [dict(view=state['view'], status=state['status'], label=state['label'],
-                     reason=('未批准，未进入本次请求' if state['status']=='unapproved'
+                     reason=('未批准，未进入本次请求' if state['status']=='unapproved' and not allow_unapproved
                              else '超出单次 3 张参考图上限'))
                 for state in states if state['view'] not in used]
-    style_refs = visual.approved_refs(references, 'style')
-    style = style_refs[0][1] if style_refs else None
+    style = visual.style_reference(references,p['assets'])
     style_status = None
     if style:
         path = media_path(style['file'])
-        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        digest = hashlib.sha256(visual.read_image(path)).hexdigest()
         if style.get('sha256') and digest!=style['sha256']:
             raise ValueError('已批准的风格参考图文件发生变化')
         style_status = 'approved' if style.get('sha256') else 'legacy'
@@ -830,8 +837,6 @@ def asset_image_packet(p, payload):
     prompt += f"素材：{version['name']}。{version.get('description','')}。"
     if version.get('outfit'):
         prompt += f"服装：{version['outfit']}。"
-    if p['creative_brief']['style']:
-        prompt += f"画风：{p['creative_brief']['style']}。"
     prompt += ''.join(f'{label}：{bible[key]}。' for key,label in visual.DIRECTION.items() if bible.get(key))
     if allow_unapproved and any(ref['status']=='unapproved' for ref in refs):
         prompt += '注意：本次生成包含尚未批准的视图，仅用于本次请求，不会自动成为正式参考。'
@@ -841,7 +846,7 @@ def asset_image_packet(p, payload):
                   parameters={'aspect_ratio':'9:16' if asset['kind']=='character' else p['creative_brief']['format']},
                   references=refs,art_style=art_style['key'],art_label=art_style['label'],
                   approval=dict(used=[dict(view=ref['view'],status=ref['status'],label=visual.VIEW_LABELS.get(ref['view'],ref['view']))
-                                      for ref in refs if ref['role']!=style],
+                                      for ref in refs if ref['role']!='style'],
                                 excluded=excluded,allow_unapproved=allow_unapproved,
                                 requires_confirmation=bool(unapproved) and not allow_unapproved,
                                 style_status=style_status))
@@ -930,7 +935,7 @@ def preview_job_quote(pid,kind,payload):
                                           '如需使用，必须在报价中明确确认。'
                                           if packet['approval']['requires_confirmation'] else ''),
                          art_label=packet.get('art_label'))
-    elif packet and packet['model']==fal_media.STORYBOARD:
+    elif packet and packet['provider']=='fal':
         fal_media.arguments(kind,snapshot,media_path)
         quote.update(references=packet['references'],configured=bool(fal_media.key()),
                      art_label=packet.get('art_label'))
@@ -941,25 +946,24 @@ def preview_job_quote(pid,kind,payload):
     return quote
 
 
-def enqueue(pid,kind,payload,nonce,*,connection=None,batch=None):
+def enqueue(pid,kind,payload,nonce,*,connection=None,batch=None,require_quote=False):
     if kind=='assemble':return enqueue_assembly(project(pid),payload,nonce)
     p,snapshot,packet,provider=job_request(pid,kind,payload)
-    expected_plan=payload.get('preparation_digest')
     quote=build_job_quote(kind,snapshot,packet,provider) if provider else None
+    if provider and require_quote and not payload.get('quote_digest'):
+        raise ValueError('请先确认本次生成报价')
     if packet and packet['provider'] in domestic_media.KEYS:
         if not payload.get('quote_digest'):raise ValueError('请先确认本次生成报价')
         if not domestic_media.key(packet['provider']):raise ValueError('请先配置 ' + domestic_media.KEYS[packet['provider']])
-        expected_plan=packet['plan_digest']
     elif packet and packet['model']==fal_media.STORYBOARD:
         if not payload.get('quote_digest'):raise ValueError('请先确认分镜图的报价')
         if not fal_media.key():raise ValueError('请先配置 fal API Key')
-        expected_plan=packet['plan_digest']
     if 'quote_digest' in payload and (not quote or payload['quote_digest']!=quote['digest']):
         raise ValueError('生成参数或报价已变化，请重新确认')
     dedupe=f'{pid}:{snapshot["episode_id"]}:{kind}:{nonce}'
     now=time.time()
     with (nullcontext(connection) if connection is not None else connect()) as c:
-        if connection is None and packet and expected_plan is not None:
+        if connection is None:
             c.execute('BEGIN IMMEDIATE')
         existing=c.execute('SELECT id FROM jobs WHERE dedupe=?',(dedupe,)).fetchone()
         if existing:return existing['id']
@@ -968,9 +972,9 @@ def enqueue(pid,kind,payload,nonce,*,connection=None,batch=None):
             if not remaining:raise ValueError('付费调用已暂停，请先明确授权本批次数')
             needed=quote['authorization_calls'] if 'quote_digest' in payload else 1
             if remaining<needed:raise ValueError(f'本次需要 {needed} 次本机授权，目前剩余 {remaining} 次')
-        if packet and expected_plan is not None:
+        if packet:
             pending=c.execute("""SELECT id FROM jobs WHERE project_id=? AND kind=?
-                AND state IN ('queued','paused','running','interrupted')
+                AND state IN ('queued','paused','running','waiting_review','interrupted')
                 AND json_extract(payload,'$.snapshot.target_shot_id') IS ?
                 AND json_extract(payload,'$.generation_unit.segment.id')=? LIMIT 1""",
                 (pid,kind,packet.get('shot_id'),packet['id'])).fetchone()
@@ -980,13 +984,22 @@ def enqueue(pid,kind,payload,nonce,*,connection=None,batch=None):
         if batch:body['batch_id']=batch
         if kind=='revision':body['revision_preview_required']=True
         if provider:body.update(provider=provider,quote=quote)
+        frozen_refs=[]
+        for ref in snapshot.get('reference_media',[]):
+            file=ref['file']
+            expected=ref.get('sha256') or ref['reference_id']
+            with media_path(file).open('rb') as stream:
+                actual=hashlib.file_digest(stream,'sha256').hexdigest()
+            if actual!=expected:
+                raise ValueError('参考文件内容已变化，请重新确认生成请求')
+            frozen_refs.append(dict(file=file,sha256=actual))
         if kind=='asset_image':
-            body['generation_unit']={'segment':packet,'references':[{'file':r['file'],'sha256':r['reference_id']} for r in packet['references']]}
+            body['generation_unit']={'segment':packet,'references':frozen_refs}
         if kind in ('image','video','audio'):
             body['generation_unit']={'id':uid(),'shot_ids':[snapshot['target_shot_id']], 'kind':kind,
                 'line_id':snapshot.get('speech',{}).get('line_id'),'input_digest':production.digest(snapshot),
                 'parameters':copy.deepcopy(snapshot.get('speech') or {'mode':snapshot.get('reference_mode'),'duration':next(s['duration'] for s in snapshot['shots'] if s['id']==snapshot['target_shot_id'])}),
-                'provider':body['provider'],'references':[{'file':r['file'],'sha256':hashlib.sha256(media_path(r['file']).read_bytes()).hexdigest()} for r in snapshot.get('reference_media',[])],
+                'provider':body['provider'],'references':frozen_refs,
                 'adapter_profile':'openai-realtime' if kind=='audio' else 'external-workflow', 'created':now}
             if packet:body['generation_unit'].update(segment=packet,parameters={**packet['parameters'],**({'duration':packet['duration']} if kind=='video' else {})},
                                                      basis=production.take_basis(preparation.shot_of(p,snapshot['target_shot_id'])))
@@ -1119,11 +1132,14 @@ def check_provider(payload, kind=None):
 def update_job(jid,state,result=None,error=None):
     with connect() as c:
         if result is not None:
+            c.execute('BEGIN IMMEDIATE')
             row=c.execute('SELECT result FROM jobs WHERE id=?',(jid,)).fetchone()
             previous=json.loads(row['result'] or '{}') if row else {}
-            for key in ('submission_started_at','provider_request_id'):
+            for key in ('submission_started_at','provider_request_id','output_sha256','actual_cny','billing_history'):
                 if previous.get(key):
                     result.setdefault(key,previous[key])
+            if previous.get('billing_history'):
+                result['billing_status']=previous['billing_status']
             if state=='succeeded' and result.get('submission_started_at'):
                 result.setdefault('completed_at',time.time())
         c.execute('UPDATE jobs SET state=?,result=?,error=?,updated=? WHERE id=? AND state!=?',(state,json.dumps(result,ensure_ascii=False) if result is not None else None,error,time.time(),jid,'cancelled'))
@@ -1159,7 +1175,7 @@ def record_job_bill(body):
         raise ValueError('请填写可核对的账单条目或凭证说明')
     with LOCK, connect() as db:
         db.execute('BEGIN IMMEDIATE')
-        row=db.execute("SELECT payload,result FROM jobs WHERE id=? AND project_id=? AND state IN ('succeeded','failed')",
+        row=db.execute("SELECT payload,result FROM jobs WHERE id=? AND project_id=? AND state IN ('succeeded','failed','interrupted')",
                        (body['job_id'],body['project_id'])).fetchone()
         if not row or not json.loads(row['payload']).get('provider'):
             raise ValueError('只能对有供应商记录的已结束任务录入账单')
@@ -1341,7 +1357,9 @@ def approve_asset_image(body):
         file=result.get('candidate_file')
         if not file or not media_path(file).is_file():
             raise ValueError('候选图片不存在，可能已被清理')
-        sha=hashlib.sha256(media_path(file).read_bytes()).hexdigest()
+        sha=hashlib.sha256(visual.read_image(media_path(file))).hexdigest()
+        if result.get('output_sha256') and sha!=result['output_sha256']:
+            raise ValueError('候选图片文件内容已变化，请核实生成记录')
         version=dict(source,id=uid(),created=time.time(),label='已批准的生成参考',file=file,views={},
                      source_job_id=body['job_id'])
         asset['versions'].append(version)
@@ -1365,7 +1383,7 @@ def approve_imported_reference(body):
         if not version or not file or file not in [version.get('file'),*version.get('views',{}).values()]:
             raise ValueError('图片不属于选定素材版本')
         view=body.get('view') or visual.view_of(version,file)
-        if view not in visual.allowed_views(asset['kind']):
+        if view not in visual.allowed_views(asset['kind']) or visual.file_at_view(version, view) != file:
             raise ValueError('视图用途无效')
         source=body.get('source')
         if not isinstance(source,str) or not 1<=len(source.strip())<=500:
@@ -1375,7 +1393,8 @@ def approve_imported_reference(body):
         matches=[r for r in refs if (asset['kind']=='style' and r['role']=='style') or
                  (r['asset_id']==asset['id'] and r['version_id']==version['id']
                   and (r.get('view') or visual.view_of(version,r['file']) or 'primary')==view)]
-        if matches and body.get('replace') is not True:
+        valid_matches = dict(visual.approved_refs(refs,asset['kind'],asset['id'],version['id'],version))
+        if (view in valid_matches or (asset['kind']=='style' and visual.style_reference(refs,p['assets']))) and body.get('replace') is not True:
             raise ValueError('这个视图已有已批准参考，请确认替换')
         with media_path(file).open('rb') as stream:
             sha=hashlib.file_digest(stream,'sha256').hexdigest()
@@ -1588,7 +1607,8 @@ def work_once():
                     creative.validate(payload['snapshot'])
                 if asset_image:
                     frozen=payload['snapshot']['generation_segment']
-                    current_packet=asset_image_packet(current,dict(frozen,instruction=frozen['user_instruction']))
+                    current_packet=asset_image_packet(current,dict(frozen,instruction=frozen['user_instruction'],
+                                                                 allow_unapproved=frozen['approval']['allow_unapproved']))
                     if current_packet!=frozen:raise ValueError('来源素材或视觉设定已变化，请重新报价')
                 if row['kind'] in ('image','video'):
                     frozen=payload.get('generation_unit',{}).get('segment')
@@ -1636,13 +1656,19 @@ def work_once():
             from .media_bridge import receive
             file=result.get('candidate_file')
             if not file:
-                file=receive(result['result']['url'],media_kind,MEDIA)
+                try:
+                    file=receive(result['result']['url'],media_kind,MEDIA)
+                except (OSError, ValueError, subprocess.SubprocessError, KeyError):
+                    raise UncertainRun('远程结果尚未入库，请恢复原任务，不重新生成') from None
                 result['candidate_file']=file
                 update_job(row['id'],'running',result)
             else:media_path(file)
             if direct_media:
                 with media_path(file).open('rb') as stream:
-                    result['output_sha256']=hashlib.file_digest(stream,'sha256').hexdigest()
+                    output_sha=hashlib.file_digest(stream,'sha256').hexdigest()
+                if result.get('output_sha256') and result['output_sha256']!=output_sha:
+                    raise UncertainRun('候选文件内容已变化，已保留原任务记录')
+                result['output_sha256']=output_sha
                 result.setdefault('billing_status','unreconciled')
                 result.setdefault('model',payload['provider'].get('model'))
 
@@ -1651,7 +1677,9 @@ def work_once():
                 return True
             with LOCK:
                 p=project(row['project_id']);s=next((s for s in p['shots'] if s['id']==payload['snapshot']['target_shot_id']),None)
-                if not s:raise ValueError('生成结果已保存，但来源镜头已删除')
+                if not s:
+                    update_job(row['id'],'failed',result,'生成结果已保存，但来源镜头已删除')
+                    return True
                 # Finished paid output is retained even if the user has since locked the shot.
                 was_locked=s.get('locked');s['locked']=False
                 source=provider
@@ -1679,7 +1707,13 @@ def work_once():
     except Exception as e:
         message=str(e) if isinstance(e,ValueError) else f'{type(e).__name__}：执行失败，请检查服务与媒体格式'
         with connect() as c: current=c.execute('SELECT result FROM jobs WHERE id=?',(row['id'],)).fetchone()
-        update_job(row['id'],'failed',json.loads(current['result']) if current['result'] else None,error=message)
+        receipt=json.loads(current['result']) if current['result'] else None
+        if receipt and not isinstance(e,RemoteTaskFailed) and (
+            receipt.get('run_id') or (row['kind'] in ('image','asset_image','video','audio') and receipt.get('state')=='succeeded')
+        ):
+            update_job(row['id'],'interrupted',receipt,error=message)
+        else:
+            update_job(row['id'],'failed',receipt,error=message)
     return True
 
 def worker():
@@ -1766,8 +1800,20 @@ class Handler(BaseHTTPRequestHandler):
                 if ext not in ('mp4','mov','wav','mp3','m4a','png','jpg','jpeg','webp'):raise ValueError('不支持该媒体格式')
                 name=uid()+'.'+ext; dest=MEDIA/name; dest.write_bytes(self.rfile.read(length))
                 try:
-                    info=json.loads(subprocess.check_output(['ffprobe','-v','error','-show_streams','-of','json',str(dest)],timeout=30))
-                    if not info.get('streams'):raise ValueError('媒体无有效轨道')
+                    formats={'mp4':'mov','mov':'mov','m4a':'mov','mp3':'mp3','wav':'wav',
+                             'png':'png_pipe','jpg':'jpeg_pipe','jpeg':'jpeg_pipe','webp':'webp_pipe'}
+                    is_image=dest.suffix in visual.IMAGE_EXTENSIONS
+                    if is_image:
+                        with dest.open('rb') as stream:
+                            mime=visual.image_mime(stream.read(12))
+                        if mime!=mimetypes.guess_type(dest.name)[0]:
+                            raise ValueError('图片字节与扩展名不匹配')
+                    info=json.loads(subprocess.check_output(['ffprobe','-v','error','-protocol_whitelist','file,pipe',
+                        '-f',formats[ext],'-show_streams','-of','json',str(dest)],timeout=30,stderr=subprocess.DEVNULL))
+                    expected='audio' if ext in ('wav','mp3','m4a') else 'video'
+                    matching=[stream for stream in info.get('streams',[]) if stream['codec_type']==expected]
+                    if not matching or (is_image and not any(s.get('width',0)>0 and s.get('height',0)>0 for s in matching)):
+                        raise ValueError('媒体类型与扩展名不匹配')
                 except (OSError, ValueError, subprocess.SubprocessError) as err:
                     dest.unlink(missing_ok=True); raise ValueError('媒体格式验证失败') from err
                 return self.respond({'file':name,'streams':[s['codec_type'] for s in info['streams']]})
@@ -1790,7 +1836,7 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/api/apply':return self.respond(apply_job(body['project_id'],body['job_id'],body['revision'],body.get('mode'),body.get('preview_digest')))
             if path=='/api/revision-preview':return self.respond(revision_preview(body['project_id'],body['job_id'],body['revision']))
             if path=='/api/apply-preview':return self.respond(adoption_preview(body['project_id'],body['job_id'],body['revision'],body.get('mode','append')))
-            if path=='/api/save':return self.respond(save(body['project'],body['revision']))
+            if path=='/api/save':return self.respond(save(body['project'],body['revision'],reference_actions_only=True))
             if path=='/api/assets/image-candidates':return self.respond(asset_image_candidates(body))
             if path=='/api/assets/approve-reference':return self.respond(approve_imported_reference(body))
             if path=='/api/jobs/bill':return self.respond(record_job_bill(body))
@@ -1806,7 +1852,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.respond(production_batch(body,path.endswith('/submit')))
             if path=='/api/jobs/batch/state':return self.respond(batch_state(body))
             if path=='/api/jobs/quote':return self.respond(preview_job_quote(body['project_id'],body['kind'],body))
-            if path=='/api/jobs':return self.respond({'id':enqueue(body['project_id'],body['kind'],body,body['nonce'])})
+            if path=='/api/jobs':return self.respond({'id':enqueue(body['project_id'],body['kind'],body,body['nonce'],require_quote=True)})
             if path=='/api/review':
                 review_job(body['project_id'],body['job_id'],body['revision'],body['review_id'],body['action'],body.get('notes',''))
                 return self.respond({'ok':True})

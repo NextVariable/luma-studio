@@ -1,5 +1,6 @@
 """Offline production preparation. Model capabilities are server-owned, never LLM claims."""
 import copy
+import hashlib
 import math
 import uuid
 from . import creative
@@ -145,6 +146,10 @@ def report(p,sid,media_path,connected=None,profiles=None):
     for seg in plan['segments']:
         sid2=seg['id'];duration=seg['end']-seg['start'];refs=[{**available[r['reference_id']],'role':r['role']} for r in seg['references']]
         counts={role:sum(r['role']==role for r in refs) for role in ROLES};mode=seg['mode'];profile=profiles.get(seg['model'])
+        if 'references' in (p['creative_brief'].get('visual_bible') or {}) and any(
+            not r.get('approved') and r['source']=='asset' for r in refs
+        ):
+            error('选择的资产参考视图尚未批准，请先在素材中批准',sid2)
         if len(refs)>10:error('当前工作流最多接收10个参考文件，不能静默截断',sid2)
         if not seg['instruction'].strip():error('请明确这一片段的动作要求',sid2)
         if len(plan['segments'])>1:
@@ -197,10 +202,21 @@ def freeze(p,sid,kind,segment_id,media_path,connected):
     seg=next((x for x in segments if x['id']==(segment_id or segments[0]['id'])),None)
     if not seg or seg['kind']!=kind:raise ValueError('生成片段不存在或类型不一致')
     profile=MODELS[seg['model']];row=next(x for x in result['segments'] if x['id']==seg['id'])
+    row=copy.deepcopy(row)
+    approvals = (p['creative_brief'].get('visual_bible') or {}).get('references', [])
+    for ref in row['references']:
+        with media_path(ref['file']).open('rb') as stream:
+            ref['sha256']=hashlib.file_digest(stream,'sha256').hexdigest()
+        if ref.get('approval_status')=='approved':
+            asset = next(a for a in p['assets'] if a['id']==ref['asset_id'])
+            version = next(v for v in asset['versions'] if v['id']==ref['version_id'])
+            approved = dict(visual.approved_refs(approvals,asset['kind'],asset['id'],version['id'],version))
+            if ref['sha256']!=approved[ref['view']]['sha256']:
+                raise ValueError('已批准的参考图文件发生变化')
     instruction=seg['instruction']
     if kind=='video':
         clause=art.video_clause(p['creative_brief'])
         if len(instruction)+len(clause)<=2000:instruction=(instruction+' '+clause).strip()
-    return {**copy.deepcopy(row),'shot_id':sid,'plan_digest':result['plan_digest'],'model_profile_digest':creative.digest(profile),
+    return {**row,'shot_id':sid,'plan_digest':result['plan_digest'],'model_profile_digest':creative.digest(profile),
             'provider':profile['provider'],'contract':profile['contract'],'instruction':instruction,
             'start_state':seg['start_state'],'end_state':seg['end_state'],'character_versions':copy.deepcopy(s['preparation']['character_versions'])}

@@ -22,7 +22,8 @@ def _money(value):
     if value in (None, ''):
         return None
     try:
-        return Decimal(str(value))
+        amount = Decimal(str(value))
+        return amount if amount.is_finite() and amount >= 0 else None
     except (InvalidOperation, ValueError):
         return None
 
@@ -38,7 +39,10 @@ def build(db, project):
     summary = dict(episodes=len(project.get('episodes') or []), shots=0, shots_with_visual=0,
                    shots_reviewed=0, images=0, videos=0, local=0, provider=0,
                    provider_unrecorded=0, reviewed_takes=0, actual_cny='0.00')
-    actual = Decimal('0')
+    receipts = {jid: json.loads(job['result'] or '{}') for jid, job in jobs.items()
+                if json.loads(job['payload'] or '{}').get('provider')}
+    amounts = [_money(receipt.get('actual_cny')) for receipt in receipts.values()]
+    actual = sum((amount for amount in amounts if amount is not None), Decimal('0'))
     items = []
     for episode in project.get('episodes') or []:
         shots = [x for x in project.get('shots') or [] if x.get('episode_id') == episode['id']]
@@ -62,9 +66,6 @@ def build(db, project):
                 if latest:
                     shot_reviewed = True
                     summary['reviewed_takes'] += 1
-                amount = _money(receipt.get('actual_cny'))
-                if amount is not None:
-                    actual += amount
                 items.append(dict(
                     episode_id=episode['id'], episode_title=episode.get('title'), shot_id=shot['id'],
                     shot_number=number, shot_title=(shot.get('description') or '')[:80],

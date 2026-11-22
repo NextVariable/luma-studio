@@ -8,8 +8,8 @@ import time
 import urllib.error
 import urllib.request
 
-from .fal_media import image_url
-from .providers import UncertainRun, open_request
+from .fal_media import reference_image_url
+from .providers import RemoteTaskFailed, UncertainRun, open_request
 
 SEEDREAM = 'doubao-seedream-4-5-251128'
 FLASH = 'doubao-seedream-5-0-flash-260915'
@@ -71,7 +71,7 @@ def arguments(kind, context, media_path):
             size = '1440x2560' if seg['parameters']['aspect_ratio']=='9:16' else '2560x1440'
             body = dict(model=FLASH,prompt=seg['instruction'],size=size,response_format='url')
             if refs:
-                body['image']=[image_url(media_path(ref['file'])) for ref in refs]
+                body['image']=[reference_image_url(ref, media_path) for ref in refs]
             return body
         count = roles.count('character')
         extras = roles[count:]
@@ -81,7 +81,7 @@ def arguments(kind, context, media_path):
             raise ValueError('分镜参考图的用途或顺序无效')
         size = {'16:9': '2560x1440', '9:16': '1440x2560'}[seg['parameters']['aspect_ratio']]
         body = dict(model=seg['model'], prompt=seg['instruction'], size=size, response_format='url',
-                    image=[image_url(media_path(r['file'])) for r in refs])
+                    image=[reference_image_url(r, media_path) for r in refs])
         if seg['model'] == SEEDREAM:
             body['sequential_image_generation'] = 'disabled'
         return body
@@ -91,7 +91,7 @@ def arguments(kind, context, media_path):
         if (seconds, resolution) not in HAILUO_PRICES or len(prompt) > 2000:
             raise ValueError('海螺时长、分辨率组合无效，或动作描述超过 2000 字')
         path = media_path(refs[0]['file'])
-        image = image_url(path)
+        image = reference_image_url(refs[0], media_path)
         try:
             probe = subprocess.check_output(['ffprobe', '-v', 'error', '-protocol_whitelist', 'file,pipe',
                 '-select_streams', 'v:0', '-show_entries', 'stream=width,height', '-of', 'csv=p=0', str(path)],
@@ -107,7 +107,7 @@ def arguments(kind, context, media_path):
         seconds = int(seg['duration'])
         if seconds != seg['duration'] or not 2 <= seconds <= 15 or seg['parameters']['resolution'] != '720P':
             raise ValueError('Wan 需要 720P 和 2 至 15 整秒的视频时长')
-        return dict(model=WAN, input=dict(prompt=seg['instruction'], img_url=image_url(media_path(refs[0]['file']))),
+        return dict(model=WAN, input=dict(prompt=seg['instruction'], img_url=reference_image_url(refs[0], media_path)),
                     parameters=dict(duration=seconds, resolution='720P', audio=False, shot_type='single'))
     raise ValueError('模型与参考素材用途不匹配')
 
@@ -148,11 +148,18 @@ class DomesticMedia:
     def submit(self, kind, context, body, on_progress):
         if kind == 'image':
             result = request('ark', '/api/v3/images/generations', body)
+            request_id = result.get('provider_request_id') or result.get('request_id')
+            request_id = request_id if isinstance(request_id, str) else None
             images = result.get('data')
-            if not isinstance(images, list) or len(images) != 1 or not isinstance(images[0], dict):
-                raise UncertainRun('未取得预期的一张分镜，请检查方舟生成记录')
-            output = completed(images[0].get('url'))
-            output.update(provider_request_id=result.get('provider_request_id') or result.get('request_id'),
+            try:
+                if not isinstance(images, list) or len(images) != 1 or not isinstance(images[0], dict):
+                    raise UncertainRun('未取得预期的一张图片，请检查方舟生成记录')
+                output = completed(images[0].get('url'))
+            except UncertainRun:
+                if request_id:
+                    on_progress(dict(provider_request_id=request_id, billing_status='unreconciled'))
+                raise
+            output.update(provider_request_id=request_id,
                           model=result.get('model') or body['model'], usage=result.get('usage'),
                           billing_status='unreconciled')
             on_progress(output)
@@ -195,7 +202,7 @@ class DomesticMedia:
             if state == 'SUCCEEDED':
                 return completed(result.get('video_url'), run)
             if state in ('FAILED', 'CANCELED'):
-                raise ValueError('百炼视频任务失败或已取消')
+                raise RemoteTaskFailed('百炼视频任务失败或已取消')
             if state not in ('PENDING', 'RUNNING'):
                 raise UncertainRun('百炼任务状态待核实')
             on_progress(previous)
@@ -236,7 +243,7 @@ def listen_minimax(run, previous, on_progress):
                 raise UncertainRun('海螺返回的文件号不一致')
             return dict(completed(file.get('download_url'), run), file_id=file_id, billing_status='unreconciled')
         if state == 'Fail':
-            raise ValueError('海螺视频任务失败')
+            raise RemoteTaskFailed('海螺视频任务失败')
         if state not in ('Preparing', 'Queueing', 'Processing'):
             raise UncertainRun('海螺任务状态待核实')
         on_progress(previous)

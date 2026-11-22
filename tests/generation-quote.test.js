@@ -36,3 +36,37 @@ test('generation confirmation displays provider price and sends its digest only 
   assert.equal(calls.at(-1)[1].quote_digest,'quoted');
   assert.equal(calls.at(-1)[1].preparation_digest,'plan');
 });
+
+test('using unapproved views shows a fresh quote before any submission',async()=>{
+  const cast=fs.readFileSync('web/js/cast.js','utf8');
+  const assetImages=cast.slice(cast.indexOf('async function assetImages'),cast.indexOf('L.assetDialog='));
+  const calls=[], dialogs=[];
+  const $=(key,dialog)=>dialog.elements[key]??=({value:'同一服装'});
+  const L={
+    S:{eid:'e',data:{spending:{remaining:3}}},
+    media:file=>'/media/'+file, quoteCost:()=> '¥0.12',
+    busy:(_button,action)=>action(), refresh:async()=>{}, toast:()=>{}, openDrawer:()=>{},
+    modal:html=>{const dialog={...html,elements:{},close:()=>{}};dialogs.push(dialog);return dialog;},
+    api:async(path,body)=>{
+      calls.push([path,body]);
+      if(path==='/api/assets/image-candidates')return [];
+      if(path==='/api/jobs/quote'){
+        const allow=body.allow_unapproved===true;
+        return {configured:true,authorization_calls:1,requires_approval:!allow,digest:allow?'new':'old',
+          references:allow?[{file:'side.jpg',status:'unapproved',label:'侧面'}]:[]};
+      }
+      return {id:'j'};
+    }
+  };
+  const open=vm.runInNewContext(assetImages+'\nassetImages',
+    {L,$,$$:()=>[],esc:String,picOf:()=>null,crypto:{randomUUID:()=> 'nonce'}});
+  await open({id:'p'},{id:'a',name:'人物',kind:'character'},{id:'v'});
+  await $('[data-quote]',dialogs[0]).onclick({});
+  await $('[data-include]',dialogs[1]).onclick({});
+  assert.equal(calls.filter(c=>c[0]==='/api/jobs').length,0);
+  assert.match(dialogs[2].body,/side\.jpg/);
+  await $('[data-send]',dialogs[2]).onclick({});
+  assert.equal(calls.at(-1)[0],'/api/jobs');
+  assert.equal(calls.at(-1)[1].quote_digest,'new');
+  assert.equal(calls.at(-1)[1].allow_unapproved,true);
+});

@@ -8,6 +8,10 @@ class UncertainRun(ValueError):
     """A request may have executed remotely; never automatically submit it again."""
 
 
+class RemoteTaskFailed(ValueError):
+    """The provider explicitly confirmed that an accepted task has ended unsuccessfully."""
+
+
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
@@ -180,7 +184,10 @@ class Dify:
                     result.update(state='waiting_review',form=result.get('form') or {'form_content':'请在 Dify 中审批，之后核实状态','inputs':[],'user_actions':[]})
                     return result
                 if name=='workflow_finished':
-                    if data.get('status')!='succeeded': raise ValueError('Dify 未成功完成，请检查远程运行日志')
+                    if data.get('status') in ('failed','stopped','canceled','cancelled'):
+                        raise RemoteTaskFailed('Dify 未成功完成，请检查远程运行日志')
+                    if data.get('status')!='succeeded':
+                        raise UncertainRun('Dify 返回未知结束状态，请核实原任务')
                     outputs=data.get('outputs') or {}
                     names=('result','input_end_result','scene_end_result','blocked_end_result','approved_end_result','rejected_end_result','timeout_end_result')
                     candidates=[outputs[n] for n in names if outputs.get(n) is not None]

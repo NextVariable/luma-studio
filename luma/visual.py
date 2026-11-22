@@ -2,6 +2,9 @@
 
 import hashlib
 
+IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.webp'}
+MAX_IMAGE_BYTES = 8 * 1024 * 1024
+
 DIRECTION = {
     'palette': '色彩与光线',
     'wardrobe': '服装连续性',
@@ -22,12 +25,38 @@ VIEW_LABELS = {'primary': '设定图', 'front': '正面', 'three_quarter': '四�
 STATUS_LABELS = {'approved': '已批准', 'legacy': '旧版批准', 'unapproved': '未批准'}
 
 
+def image_mime(data):
+    if data.startswith(b'\x89PNG\r\n\x1a\n'):
+        return 'image/png'
+    if data.startswith(b'\xff\xd8\xff'):
+        return 'image/jpeg'
+    if data.startswith(b'RIFF') and data[8:12] == b'WEBP':
+        return 'image/webp'
+    raise ValueError('参考图须为 PNG、JPEG 或 WebP 图片')
+
+
+def read_image(path):
+    if path.suffix.lower() not in IMAGE_EXTENSIONS:
+        raise ValueError('参考图须为 PNG、JPEG 或 WebP 图片')
+    with path.open('rb') as stream:
+        data = stream.read(MAX_IMAGE_BYTES + 1)
+    if len(data) > MAX_IMAGE_BYTES:
+        raise ValueError('参考图须不超过 8 MB')
+    return data
+
+
+def file_at_view(version, view):
+    return version.get('file') if view == 'primary' else (version.get('views') or {}).get(view)
+
+
 def view_of(version, file):
     """The view slot a file occupies in a version, or None when it is unrelated."""
+    if file and version.get('file') == file:
+        return 'primary'
     for view, other in (version.get('views') or {}).items():
         if other == file:
             return view
-    return 'primary' if version.get('file') == file else None
+    return None
 
 
 def allowed_views(role):
@@ -46,11 +75,23 @@ def approved_refs(references, role, asset_id=None, version_id=None, version=None
         if version_id is not None and ref.get('version_id') != version_id:
             continue
         view = ref.get('view') or (view_of(version, ref.get('file')) if version else None)
-        if view is None:
+        if view is None and version is None:
             view = 'primary'
+        if view not in order or (version is not None and file_at_view(version, view) != ref.get('file')):
+            continue
         items.append((order.get(view, len(order)), view, ref))
     items.sort(key=lambda item: item[0])
     return [(view, ref) for _, view, ref in items]
+
+
+def style_reference(references, assets):
+    for _, ref in approved_refs(references, 'style'):
+        asset = next((a for a in assets if a['id'] == ref.get('asset_id') and a['kind'] == 'style'), None)
+        if asset:
+            version = next((v for v in asset['versions'] if v['id'] == ref.get('version_id')), None)
+            if version and file_at_view(version, 'primary') == ref['file']:
+                return ref
+    return None
 
 
 def view_states(version, references, role, asset_id, version_id):
@@ -81,7 +122,7 @@ def view_states(version, references, role, asset_id, version_id):
     return states
 
 
-def validate_bible(brief, assets, media_path):
+def validate_bible(brief, assets, media_path, previous=()):
     bible = brief.get('visual_bible', {})
     if not isinstance(bible, dict) or set(bible) - {*DIRECTION, 'references'}:
         raise ValueError('视觉设定格式无效')
@@ -107,14 +148,15 @@ def validate_bible(brief, assets, media_path):
         key = (role, ref['asset_id'], ref['version_id'], view)
         if (role not in ROLES or asset.get('kind') != role or view not in allowed_views(role)
                 or key in seen or (role == 'style' and (style_seen or view != 'primary'))
-                or ref['file'] not in [version.get('file'), *version.get('views', {}).values()]):
+                or file_at_view(version, view) != ref['file']):
+            if ref in previous:
+                continue
             raise ValueError('视觉参考必须属于指定资产版本；同一版本可按视图分别批准，作品只能指定一张风格图')
-        path = media_path(ref['file'])
-        if path.suffix.lower() not in ('.png', '.jpg', '.jpeg', '.webp') or path.stat().st_size > 8*1024*1024:
-            raise ValueError('视觉参考必须是 8 MB 以内的图片')
-        if ref.get('sha256'):
-            if hashlib.sha256(path.read_bytes()).hexdigest()!=ref['sha256']:
+        if ref not in previous:
+            data = read_image(media_path(ref['file']))
+            if ref.get('sha256') and hashlib.sha256(data).hexdigest()!=ref['sha256']:
                 raise ValueError('已批准的参考图文件发生变化')
+            image_mime(data)
         seen.add(key)
         if role == 'style':
             style_seen = True
