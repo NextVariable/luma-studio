@@ -124,7 +124,7 @@ def request(provider, path, body=None):
             result = json.loads(response.read(2_000_001))
         if not isinstance(result, dict):
             raise ValueError()
-        if provider == 'ark' and request_id:
+        if request_id:
             result['provider_request_id'] = request_id
         return result
     except urllib.error.HTTPError as error:
@@ -160,13 +160,20 @@ class DomesticMedia:
             if not valid_run(run):
                 raise UncertainRun('海螺未返回可查询的任务编号，请核对原请求')
             previous = dict(run_id=run, state='running', billing_status='unreconciled')
+            request_id=response.get('provider_request_id') or response.get('request_id')
+            if isinstance(request_id,str):
+                previous['provider_request_id']=request_id
             on_progress(previous)
             return self.listen(kind, context, previous, on_progress)
         result = request('dashscope', '/api/v1/services/aigc/video-generation/video-synthesis', body)
-        run = result.get('output', {}).get('task_id')
+        output = result.get('output')
+        run = output.get('task_id') if isinstance(output,dict) else None
         if not valid_run(run):
             raise UncertainRun('百炼未返回可查询的任务编号，请核对原请求')
         previous = dict(run_id=run, state='running')
+        request_id=result.get('provider_request_id') or result.get('request_id')
+        if isinstance(request_id,str):
+            previous['provider_request_id']=request_id
         on_progress(previous)
         return self.listen(kind, context, previous, on_progress)
 
@@ -178,7 +185,9 @@ class DomesticMedia:
             return listen_minimax(run, previous, on_progress)
         deadline = time.monotonic() + 600
         while time.monotonic() < deadline:
-            result = request('dashscope', '/api/v1/tasks/' + run).get('output', {})
+            result = request('dashscope', '/api/v1/tasks/' + run).get('output')
+            if not isinstance(result,dict):
+                raise UncertainRun('百炼任务响应缺少状态，保留原任务号')
             state = result.get('task_status')
             if state == 'SUCCEEDED':
                 return completed(result.get('video_url'), run)

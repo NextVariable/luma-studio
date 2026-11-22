@@ -39,7 +39,11 @@ def candidates(db, project, shot):
                          estimated_cny=quote.get('estimated_cny'), estimated_usd=quote.get('estimated_usd'),
                          actual_cny=receipt.get('actual_cny'), billing_status=receipt.get('billing_status'),
                          request_id=receipt.get('provider_request_id') or receipt.get('run_id'),
-                         queue_to_result_seconds=elapsed, reviews=[dict(r, matches_shot=r.get('shot_basis')==basis)
+                         comparison_id=take.get('comparison_id'),
+                         queue_to_result_seconds=elapsed,
+                         execution_seconds=round(max(0,receipt['completed_at']-receipt['submission_started_at']),1)
+                         if receipt.get('completed_at') and receipt.get('submission_started_at') else None,
+                         reviews=[dict(r, matches_shot=r.get('shot_basis')==basis)
                          for r in reviews.get(take['id'], [])]))
     return rows
 

@@ -16,7 +16,7 @@ from . import assembly
 from . import continuity
 from . import local_storage
 from . import openai_direct
-from . import blocking, visual, quality
+from . import blocking, visual, quality, comparison
 from . import sample_scene
 from . import generation_quote
 
@@ -798,7 +798,10 @@ def job_request(pid,kind,payload,*,quoting=False):
         snapshot.update(generation_segment=packet,reference_media=packet['references'],reference_mode='asset')
     expected_plan=payload.get('preparation_digest')
     if kind in ('image','video'):
-        if kind=='image' and payload.get('storyboard') is True:
+        if kind=='video' and payload.get('comparison') is True:
+            with connect() as db:
+                packet=comparison.packet(db,p,preparation.shot_of(p,snapshot['target_shot_id']),payload,media_path)
+        elif kind=='image' and payload.get('storyboard') is True:
             packet=storyboard_packet(p,snapshot['target_shot_id'],payload.get('model',fal_media.STORYBOARD),
                                      reference_mode=payload.get('storyboard_reference_mode','image'))
         else:packet=preparation.freeze(p,snapshot['target_shot_id'],kind,payload.get('segment_id'),media_path,None if quoting else lambda k:bool(key_for(k)))
@@ -852,6 +855,9 @@ def preview_job_quote(pid,kind,payload):
     elif packet and packet['model']==fal_media.STORYBOARD:
         fal_media.arguments(kind,snapshot,media_path)
         quote.update(references=packet['references'],configured=bool(fal_media.key()))
+    if packet and packet.get('comparison_id'):
+        quote.update(comparison_id=packet['comparison_id'], duration=packet['duration'],
+                     resolution=packet['parameters']['resolution'])
     if kind=='asset_image':quote['prompt']=packet['instruction']
     return quote
 
@@ -914,10 +920,10 @@ def production_batch(body, submit=False):
     requests=body.get('requests')
     if not isinstance(requests,list) or not 1<=len(requests)<=20 or any(not isinstance(r,dict) for r in requests):
         raise ValueError('每批须选择 1–20 个生成片段')
-    allowed={'kind','shot_id','episode_id','segment_id','storyboard','model','storyboard_reference_mode'}
+    allowed={'kind','shot_id','episode_id','segment_id','storyboard','model','storyboard_reference_mode','comparison','instruction','seconds'}
     if any(set(r)-allowed or r.get('kind') not in ('image','video') or not r.get('shot_id') for r in requests):
         raise ValueError('批次只支持已准备的镜头画面')
-    identifiers=[(r['kind'],r['shot_id'],r.get('segment_id')) for r in requests]
+    identifiers=[(r['kind'],r['shot_id'],r.get('segment_id'),r.get('model') if r.get('comparison') else None) for r in requests]
     if len(set(identifiers))!=len(requests):
         raise ValueError('同批不能重复提交同一片段')
     with LOCK:
@@ -952,6 +958,36 @@ def production_batch(body, submit=False):
             jobs=[enqueue(pid,r['kind'],dict(r,quote_digest=q['digest']),f'{batch}-{i}',connection=db,batch=batch)
                   for i,(r,q) in enumerate(zip(requests,quotes,strict=True))]
     return dict(batch_id=batch,jobs=jobs)
+
+
+def director_references(body):
+    """Preview the same references an Ark storyboard would actually receive."""
+    p=project(body['project_id'])
+    shot=preparation.shot_of(p,body['shot_id'])
+    modes={}
+    for mode in ('image','text'):
+        try:
+            packet=storyboard_packet(p,shot['id'],domestic_media.FLASH,reference_mode=mode)
+        except ValueError as exc:
+            modes[mode]={'blocked':str(exc)}
+            continue
+        references=[]
+        for ref in packet['references']:
+            reason={'character':'当前镜头明确绑定的角色造型',
+                    'scene':'当前镜头场景版本的已批准环境图',
+                    'style':'作品当前批准的风格图',
+                    'composition':'该镜预演的站位和机位'}[ref['role']]
+            references.append(dict(ref,reason=reason))
+        modes[mode]=dict(references=references,staging=packet['staging'])
+    return modes
+
+
+def video_comparison(body):
+    scope={key:body[key] for key in ('shot_id','episode_id','instruction','seconds') if key in body}
+    requests=[dict(scope,kind='video',comparison=True,model=model) for model in comparison.RESOLUTIONS]
+    result=production_batch(dict(project_id=body['project_id'],requests=requests))
+    result['requests']=requests
+    return result
 
 
 def batch_state(body):
@@ -1003,7 +1039,16 @@ def check_provider(payload, kind=None):
 
 def update_job(jid,state,result=None,error=None):
     with connect() as c:
+        if result is not None:
+            row=c.execute('SELECT result FROM jobs WHERE id=?',(jid,)).fetchone()
+            previous=json.loads(row['result'] or '{}') if row else {}
+            for key in ('submission_started_at','provider_request_id'):
+                if previous.get(key):
+                    result.setdefault(key,previous[key])
+            if state=='succeeded' and result.get('submission_started_at'):
+                result.setdefault('completed_at',time.time())
         c.execute('UPDATE jobs SET state=?,result=?,error=?,updated=? WHERE id=? AND state!=?',(state,json.dumps(result,ensure_ascii=False) if result is not None else None,error,time.time(),jid,'cancelled'))
+
 
 def public_job(row):
     job={k:row[k] for k in ('id','project_id','kind','state','result','error','created','updated')}
@@ -1014,12 +1059,43 @@ def public_job(row):
     job['target_shot_id']=snapshot.get('target_shot_id');job['scope']=snapshot.get('scope');job['provider']=json.loads(row['payload']).get('provider')
     job['generation_unit']=json.loads(row['payload']).get('generation_unit')
     job['batch_id']=json.loads(row['payload']).get('batch_id')
+    if job['provider']:
+        job['provider']={k:job['provider'][k] for k in ('provider','model') if k in job['provider']}
+    if job['generation_unit'] and job['generation_unit'].get('provider'):
+        job['generation_unit']['provider']=job['provider']
+
     if job['result']:
         result=json.loads(job['result']);result.pop('form_token',None)
         if isinstance(result.get('form'),dict):
             result['form']={k:result['form'][k] for k in ('form_content','inputs','user_actions','resolved_default_values','expiration_time') if k in result['form']}
         job['result']=json.dumps(result,ensure_ascii=False)
     return job
+
+def record_job_bill(body):
+    value=body.get('actual_cny')
+    evidence=body.get('evidence')
+    if not isinstance(value,str) or not re.fullmatch(r'[0-9]{1,7}(?:\.[0-9]{1,4})?',value):
+        raise ValueError('请输入非负人民币金额，最多四位小数')
+    if not isinstance(evidence,str) or not 1<=len(evidence.strip())<=300:
+        raise ValueError('请填写可核对的账单条目或凭证说明')
+    with LOCK, connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        row=db.execute("SELECT payload,result FROM jobs WHERE id=? AND project_id=? AND state IN ('succeeded','failed')",
+                       (body['job_id'],body['project_id'])).fetchone()
+        if not row or not json.loads(row['payload']).get('provider'):
+            raise ValueError('只能对有供应商记录的已结束任务录入账单')
+        result=json.loads(row['result'] or '{}')
+        if not any(result.get(key) for key in ('provider_request_id','run_id','submission_started_at')):
+            raise ValueError('该任务没有外部请求证据')
+        entries=result.setdefault('billing_history',[])
+        if entries and entries[-1]['cny']==value and entries[-1]['evidence']==evidence.strip():
+            return entries[-1]
+        entry=dict(cny=value,evidence=evidence.strip(),recorded_at=time.time(),source='manual')
+        entries.append(entry)
+        result.update(actual_cny=value,billing_status='manual_statement')
+        db.execute('UPDATE jobs SET result=? WHERE id=?',(json.dumps(result,ensure_ascii=False),body['job_id']))
+        return entry
+
 
 def configure_dify(base,key,kind='shots'):
     if kind not in ('shots','revision','image','video','audio','script','assets','plan','qc'):raise ValueError('工作流类型无效')
@@ -1172,6 +1248,33 @@ def approve_asset_image(body):
         bible=p['creative_brief'].setdefault('visual_bible',{})
         bible.setdefault('references',[]).append(dict(role=asset['kind'],asset_id=asset['id'],
             version_id=version['id'],file=file,source='Seedream · '+body['job_id'],sha256=sha))
+        return save(p,p['revision'])
+
+
+def approve_imported_reference(body):
+    with LOCK:
+        p=project(body['project_id'])
+        if p['revision']!=body['revision']:
+            raise ValueError('作品已变化，请刷新后确认')
+        asset=next((a for a in p['assets'] if a['id']==body.get('asset_id') and a['kind'] in visual.ROLES),None)
+        version=next((v for v in asset['versions'] if v['id']==body.get('version_id')),None) if asset else None
+        file=body.get('file')
+        if not version or not file or file not in [version.get('file'),*version.get('views',{}).values()]:
+            raise ValueError('图片不属于选定素材版本')
+        source=body.get('source')
+        if not isinstance(source,str) or not 1<=len(source.strip())<=500:
+            raise ValueError('请填写图片来源')
+        bible=p['creative_brief'].setdefault('visual_bible',{})
+        refs=bible.setdefault('references',[])
+        matches=[r for r in refs if (asset['kind']=='style' and r['role']=='style') or
+                 (r['asset_id']==asset['id'] and r['version_id']==version['id'])]
+        if matches and body.get('replace') is not True:
+            raise ValueError('这个用途已有已批准参考，请确认替换')
+        with media_path(file).open('rb') as stream:
+            sha=hashlib.file_digest(stream,'sha256').hexdigest()
+        refs[:]=[r for r in refs if r not in matches]
+        refs.append(dict(role=asset['kind'],asset_id=asset['id'],version_id=version['id'],
+                         file=file,source=source.strip(),sha256=sha))
         return save(p,p['revision'])
 
 
@@ -1383,7 +1486,11 @@ def work_once():
                 if row['kind'] in ('image','video'):
                     frozen=payload.get('generation_unit',{}).get('segment')
                     if not frozen:raise ValueError('旧媒体任务没有片段制作准备，拒绝直接提交')
-                    if frozen['mode']=='storyboard':
+                    if frozen.get('comparison_id'):
+                        with connect() as db:
+                            current_packet=comparison.packet(db,current,preparation.shot_of(current,frozen['shot_id']),
+                                dict(frozen,seconds=frozen['duration']),media_path)
+                    elif frozen['mode']=='storyboard':
                         current_packet=storyboard_packet(current,frozen['shot_id'],frozen['model'],
                                                          reference_mode=frozen.get('reference_mode','image'))
                     else:current_packet=preparation.freeze(current,frozen['shot_id'],row['kind'],frozen['id'],media_path,lambda k:bool(key_for(k)))
@@ -1411,6 +1518,7 @@ def work_once():
                     if result['state']=='succeeded':
                         revision_comparison(project(row['project_id']),payload['snapshot'],result['result'])
             elif direct_media:
+                checkpoint({'submission_started_at':time.time(),'billing_status':'unreconciled'})
                 result=adapter.submit(media_kind, payload['snapshot'], arguments, checkpoint)
             elif row['kind'] in ('image','video','audio'):
                 result=Dify().run(row['kind'],payload['snapshot'],checkpoint,media_path=media_path)
@@ -1425,6 +1533,12 @@ def work_once():
                 result['candidate_file']=file
                 update_job(row['id'],'running',result)
             else:media_path(file)
+            if direct_media:
+                with media_path(file).open('rb') as stream:
+                    result['output_sha256']=hashlib.file_digest(stream,'sha256').hexdigest()
+                result.setdefault('billing_status','unreconciled')
+                result.setdefault('model',payload['provider'].get('model'))
+
             if asset_image:
                 update_job(row['id'],state,result)
                 return True
@@ -1438,7 +1552,11 @@ def work_once():
                 t=production.add_take(s,row['kind'],file,label,source,basis=payload.get('generation_unit',{}).get('basis') or production.take_basis(next(x for x in payload['snapshot']['shots'] if x['id']==s['id'])),job_id=row['id'],shot_basis=production.content_basis(next(x for x in payload['snapshot']['shots'] if x['id']==s['id'])))
                 if t and source in domestic_media.KEYS:
                     t['model']=payload['provider']['model']
-                if t and payload.get('generation_unit',{}).get('segment'):t['generation_segment']={k:payload['generation_unit']['segment'][k] for k in ('id','start','end','shot_id')}
+                if t and payload.get('generation_unit',{}).get('segment'):
+                    segment=payload['generation_unit']['segment']
+                    t['generation_segment']={k:segment[k] for k in ('id','start','end','shot_id')}
+                    if segment.get('comparison_id'):
+                        t['comparison_id']=segment['comparison_id']
                 if t and row['kind']=='audio':
                     snapshot=payload['snapshot']
                     line_id=snapshot.get('speech',{}).get('line_id')
@@ -1567,11 +1685,15 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/api/apply-preview':return self.respond(adoption_preview(body['project_id'],body['job_id'],body['revision'],body.get('mode','append')))
             if path=='/api/save':return self.respond(save(body['project'],body['revision']))
             if path=='/api/assets/image-candidates':return self.respond(asset_image_candidates(body))
+            if path=='/api/assets/approve-reference':return self.respond(approve_imported_reference(body))
+            if path=='/api/jobs/bill':return self.respond(record_job_bill(body))
             if path=='/api/assets/approve-image':return self.respond(approve_asset_image(body))
             if path in ('/api/quality/open','/api/quality/record'):
                 return self.respond(candidate_review(body,path.endswith('/record')))
             if path=='/api/production':return self.respond(edit_production(body))
             if path=='/api/settings/spending':return self.respond(set_spending(body.get('remaining')))
+            if path=='/api/director/references':return self.respond(director_references(body))
+            if path=='/api/jobs/video-comparison':return self.respond(video_comparison(body))
             if path in ('/api/jobs/batch/quote','/api/jobs/batch/submit'):
                 return self.respond(production_batch(body,path.endswith('/submit')))
             if path=='/api/jobs/batch/state':return self.respond(batch_state(body))

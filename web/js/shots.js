@@ -414,7 +414,7 @@ async function compareCandidates(project,shot){
     const item=candidates[+select.value], review=item.reviews.at(-1);
     const node=$(`[data-comparison="${select.dataset.candidate}"]`,dialog);
     const cost=item.actual_cny!=null?'实扣 ¥'+item.actual_cny:item.estimated_cny!=null?'报价 ¥'+item.estimated_cny:item.estimated_usd!=null?'报价 $'+item.estimated_usd:'';
-    node.innerHTML=`${mediaTag(item.file,{controls:true})}<p class="muted">${esc([cost,item.queue_to_result_seconds!=null?'入队至完成 '+item.queue_to_result_seconds+' 秒':'',item.selected?'已选用':''].filter(Boolean).join(' · '))}</p>
+    node.innerHTML=`${mediaTag(item.file,{controls:true})}<p class="muted">${esc([cost,item.execution_seconds!=null?'提交至入库 '+item.execution_seconds+' 秒':item.queue_to_result_seconds!=null?'入队至完成 '+item.queue_to_result_seconds+' 秒':'',item.selected?'已选用':''].filter(Boolean).join(' · '))}</p>
       ${review?`<p>${review.matches_shot?'':'旧镜头设定 · '}${esc(review.notes)}</p>`:''}<button class="btn small" data-review-media>人工复核</button>
       ${review&&review.matches_shot&&Object.values(review.structure).includes('fail')?'<button class="btn small" data-revise-reviewed>提出单镜修改</button>':''}`;
     $('[data-revise-reviewed]',node)?.addEventListener('click',()=>{dialog.close();reviseDialog(shot,review.notes)});
@@ -441,7 +441,10 @@ async function compareCandidates(project,shot){
 
 /* 制作：制作准备、片段选用与本机拼接 */
 function make(p,s){
-  return `<div id="prep" class="side-stack"><p class="faint">正在读取制作准备…</p></div>`;
+  return `<div class="row" role="group" aria-label="制作模式">
+    <button class="btn small" data-production-mode="basic" aria-pressed="true">基础</button>
+    <button class="btn small" data-production-mode="advanced" aria-pressed="false">高级</button></div>
+    <div id="prep" class="side-stack"></div>`;
 }
 const generationModes={
   text_to_image:'文字生图',reference_to_image:'参考图生图',
@@ -451,10 +454,81 @@ const referenceRoles={reference_image:'参考图',first_frame:'视频首帧',las
 
 async function bindMake(view,p,s){
   const box=$('#prep',view);
+  const modes=$$('[data-production-mode]',view);
+  const setMode=async (mode,changing=false)=>{
+    if(changing&&!await L.leaveOk())return;
+    L.ui.productionMode=mode;
+    modes.forEach(button=>button.setAttribute('aria-pressed',button.dataset.productionMode===mode));
+    if(mode==='basic')await basicProduction(box,p,s);
+    else await bindAdvancedMake(box,view,p,s);
+  };
+  modes.forEach(button=>button.onclick=e=>L.busy(e.currentTarget,()=>setMode(button.dataset.productionMode,true)));
+  await setMode(L.ui.productionMode||'basic');
+}
+
+async function basicProduction(box,p,s){
+  const scope={project_id:p.id,shot_id:s.id,episode_id:s.episode_id};
+  const director=await L.api('/api/director/references',scope);
+  if(!box.isConnected||L.ui.productionMode!=='basic')return;
+  const decision=director.text;
+  const approvals=decision.references?.filter(r=>r.status==='legacy')||[];
+  box.innerHTML=`<div class="side-stack">
+    <div><b>1. 检查人物和场景</b>
+      ${decision.blocked?`<p class="muted">${esc(decision.blocked)}</p>`:
+        decision.references.map(r=>`<p class="muted">${esc(r.label)} · ${esc(r.reason)}${r.status==='legacy'?' · 待确认参考图':''}</p>`).join('')}
+      ${approvals.length?'<button class="btn small" data-guide-assets>检查角色与场景</button>':''}</div>
+    <div><b>2. 定机位并生成分镜</b><div class="row">
+      <button class="btn small" data-guide-camera>调整机位</button>
+      <button class="btn small" data-guide-image ${decision.blocked?'disabled':''}>查看分镜报价</button></div></div>
+    <div><b>3. 看候选并记录复核</b><div class="row">
+      <button class="btn small" data-guide-review ${s.takes.some(t=>t.kind!=='audio')?'':'disabled'}>比较候选</button>
+      <button class="btn small" data-guide-video ${s.image?'':'disabled'}>Wan／海螺对照</button></div></div>
+    <div><b>4. 配音、字幕和导出</b><div class="row">
+      <button class="btn small" data-guide-dialogue>编辑对白</button>
+      <button class="btn small" data-guide-delivery>检查交付</button></div></div></div>`;
+  const prepare=(selector,action)=>{const button=$(selector,box);if(button)button.onclick=e=>L.busy(e.currentTarget,action)};
+  prepare('[data-guide-assets]',()=>L.go('cast'));
+  prepare('[data-guide-camera]',()=>L.shotCamera(s));
+  prepare('[data-guide-image]',()=>L.storyboardQuote(s.id,undefined,'text'));
+  prepare('[data-guide-review]',()=>compareCandidates(p,s));
+  prepare('[data-guide-video]',()=>compareVideo(scope,s));
+  prepare('[data-guide-dialogue]',()=>{L.ui.tab='dialogue';L.render()});
+  prepare('[data-guide-delivery]',()=>L.go('delivery'));
+}
+
+function compareVideo(scope,shot){
+  const modal=L.modal({title:'同首帧对照',body:`
+    <p>两个模型使用同一张已选分镜、动作和时长。首帧须通过人工复核。</p>
+    <label class="field"><span>共同动作</span><textarea data-motion rows="3" maxlength="2000">${esc(shot.description.slice(0,2000))}</textarea></label>
+    <label class="field"><span>生成时长</span><select data-seconds><option value="6">6 秒</option><option value="10">10 秒</option></select></label>
+    <p class="muted">Wan 使用 720P，海螺使用 768P。对照时长与正片镜头不同时，先在制作准备里处理裁切或生成正式片段。</p>`,
+    foot:'<button class="btn" data-close>取消</button><button class="btn primary" data-review-quote>查看两家报价</button>'});
+  $('[data-review-quote]',modal).onclick=e=>L.busy(e.currentTarget,async()=>{
+    const q=await L.api('/api/jobs/video-comparison',{...scope,seconds:Number($('[data-seconds]',modal).value),instruction:$('[data-motion]',modal).value});
+    modal.close();
+    const compare=L.modal({title:'两家视频报价',body:`
+      <img src="${L.media(q.quotes[0].references[0].file)}" alt="共同首帧">
+      <p>${esc(q.requests[0].instruction)}</p>
+      ${q.quotes.map((item,i)=>`<div class="row"><span>${esc(item.model_label)} · ${esc(item.resolution)} · ${esc(L.quoteCost(item))}</span>
+        <button class="btn small" data-provider-quote="${i}" ${!item.configured||L.S.data.spending.remaining<1?'disabled':''}>确认此项费用</button></div>`).join('')}`,
+      foot:'<button class="btn" data-close>关闭</button>'});
+    const nonces=q.requests.map(()=>crypto.randomUUID());
+    $$('[data-provider-quote]',compare).forEach(button=>button.onclick=e=>L.busy(e.currentTarget,async()=>{
+      const index=Number(button.dataset.providerQuote), item=q.quotes[index];
+      if(!await L.confirmBox('提交 '+item.model_label+'？',L.quoteCost(item)+'，结果将加入候选。','确认并生成'))return;
+      await L.api('/api/jobs',{...scope,...q.requests[index],quote_digest:item.digest,nonce:nonces[index]});
+      await L.refresh();button.disabled=true;
+      if(!L.S.data.spending.remaining)$$('[data-provider-quote]',compare).forEach(other=>other.disabled=true);
+      L.toast('已加入生成队列');
+    }));
+  });
+}
+
+async function bindAdvancedMake(box,view,p,s){
   const open=()=>L.api('/api/preparation/open',{project_id:p.id,shot_id:s.id});
   try{
     let data=await open();
-    if(!box.isConnected)return;
+    if(!box.isConnected||L.ui.productionMode!=='advanced')return;
     const plan=structuredClone(data.plan),chosen={...(s.segment_sources||{})};
     const nonces=new Map();
     let changed=false;

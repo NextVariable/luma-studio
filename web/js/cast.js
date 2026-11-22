@@ -46,6 +46,10 @@ function addAsset(){
 function assetDialog(aid){
   const p=L.project(),a=p.assets.find(x=>x.id===aid);if(!a)return;
   const v=current(a),isChar=a.kind==='character';
+  const ref=picOf(a), approvals=p.creative_brief?.visual_bible?.references||[];
+  const eligible=ref&&['character','scene','style'].includes(a.kind);
+  const active=approvals.find(r=>r.asset_id===aid&&r.version_id===v.id&&r.file===ref);
+  const replacement=approvals.some(r=>a.kind==='style'?r.role==='style':r.asset_id===aid&&r.version_id===v.id);
   const m=L.modal({title:a.name,wide:true,body:`
     <div class="grid2">
       <label class="field"><span>名称</span><input class="input" id="e-name" maxlength="100" value="${esc(a.name)}"></label>
@@ -60,12 +64,21 @@ function assetDialog(aid){
       <div class="views">${Object.entries(VIEWS).map(([k,label])=>{const f=v.views?.[k];return `<button class="view-slot" data-view="${k}" style="${f?`background-image:url('${L.media(f)}')`:''}">${f?'':'＋'}<span>${label}</span></button>`}).join('')}</div>`
     :`<div class="row"><button class="btn small" id="ref-up">上传参考图，生成新版本</button>${v.file?`<a class="faint" href="${L.media(v.file)}" target="_blank" rel="noopener">查看当前参考图</a>`:''}</div>`}
     ${['character','scene'].includes(a.kind)?'<button class="btn small" id="asset-images">生成参考与比较候选</button>':''}
+    ${eligible?`<button class="btn small" id="approve-ref" ${active?'disabled':''}>${active?'已批准用于生成':'批准当前参考图'}</button>`:''}
     <div class="sub">版本（${a.versions.length}）</div>
     <div class="versions">${[...a.versions].reverse().map(x=>`<button data-vid="${esc(x.id)}" ${x.id===a.selected_version?'aria-current="true"':''}><span class="dot ${x.id===a.selected_version?'ok':''}"></span>${esc(x.label||'版本')}<span class="faint">${esc((x.outfit||x.description||'').slice(0,40))}</span><span class="spacer"></span><span class="faint">${x.created?L.timeAgo(x.created):'初始'}</span></button>`).join('')}</div>
     <p class="faint" style="margin:0">选用其他版本只影响之后新绑定的镜头；已有镜头在「镜头 › 素材」里单独更新。</p>`});
   const reopen=()=>{L.render();assetDialog(aid)};
   $('#asset-images',m)?.addEventListener('click',e=>L.busy(e.currentTarget,async()=>{
     m.close();await assetImages(p,a,v);
+  }));
+  $('#approve-ref',m)?.addEventListener('click',e=>L.busy(e.currentTarget,async()=>{
+    if(replacement&&!await L.confirmBox('替换已批准的参考图？','新的参考用于后续生成。既有素材仍保留。','替换参考图'))return;
+    const source=await L.prompt('登记参考图','图片来源或制作说明','','批准参考图');
+    if(!source?.trim())return;
+    const saved=await L.api('/api/assets/approve-reference',{project_id:p.id,asset_id:aid,version_id:v.id,file:ref,
+      revision:p.revision,source:source.trim(),replace:replacement});
+    L.replaceProject(saved);m.close();L.render();L.toast('已批准用于生成');
   }));
   $('#e-save',m).onclick=e=>L.busy(e.currentTarget,async()=>{
     const name=$('#e-name',m).value.trim();if(!name)throw Error('名称不能为空');
