@@ -504,7 +504,7 @@ def edit_production(body):
         p=project(body['project_id'])
         if p['revision']!=body['revision']:raise ValueError('作品已更新，请刷新')
         action=body['action']
-        if action in ('asset_version','asset_select','character_look'):
+        if action in ('asset_version','asset_select','asset_view','character_look'):
             a=next((a for a in p['assets'] if a['id']==body.get('asset_id')),None)
             if not a:raise ValueError('资产不存在')
             if action=='character_look':
@@ -514,6 +514,18 @@ def edit_production(body):
                 if 'outfit' in body and body['outfit']!=current.get('outfit',''):v.update(views={},file=None)
                 for k in ('views','outfit','voice_id'):
                     if k in body:v[k]=body[k]
+                a['versions'].append(v)
+            elif action=='asset_view':
+                if a['kind'] not in ('character','scene'):raise ValueError('只有角色或场景可以添加视图')
+                view=body.get('view')
+                if view not in visual.allowed_views(a['kind']) or view=='primary':raise ValueError('视图类型无效')
+                file=body.get('file');media_path(file)
+                current=next(v for v in a['versions'] if v['id']==a['selected_version'])
+                v={**copy.deepcopy(current),'id':uid(),'created':time.time(),'name':a['name'],
+                   'description':body.get('description',a.get('description','')),
+                   'label':body.get('label',view)[:100],
+                   'views':{**(current.get('views') or {}),view:file}}
+                if not v.get('file'):v['file']=None
                 a['versions'].append(v)
             elif action=='asset_version':
                 file=body.get('file')
@@ -641,7 +653,7 @@ def storyboard_packet(p,sid,model=fal_media.STORYBOARD, *, reference_mode='image
     refs = []
     instructions = ['绘制一张完成的漫剧分镜。']
     bible = p['creative_brief'].get('visual_bible', {})
-    approved = {(r['role'], r['asset_id'], r['version_id']): r for r in bible.get('references', [])}
+    approvals = bible.get('references', [])
     ark = model in domestic_media.STILL_MODELS
 
     def bound_version(asset):
@@ -675,17 +687,22 @@ def storyboard_packet(p,sid,model=fal_media.STORYBOARD, *, reference_mode='image
     for index, actor in enumerate(actors, 1):
         version = bound_version(assets[actor['id']])
         views = version.get('views') or {}
-        approval = approved.get(('character', actor['id'], version['id']))
-        portrait = approval['file'] if approval else version.get('file') or views.get('three_quarter') or views.get('front')
+        picks = visual.approved_refs(approvals, 'character', actor['id'], version['id'], version)
+        if picks:
+            pick_view, approval = picks[0]
+            portrait = approval['file']
+        else:
+            pick_view, approval = None, None
+            portrait = version.get('file') or views.get('three_quarter') or views.get('front')
         name = version.get('name') or actor['name']
         if not portrait:
             raise ValueError(f'请为{name}当前绑定的造型添加角色参考图')
-        add_reference('character', portrait, name + ' · 角色参考')
+        add_reference('character', portrait, name + ' · ' + visual.VIEW_LABELS.get(pick_view, '角色参考'))
         if approval and approval.get('sha256') and refs[-1]['reference_id']!=approval['sha256']:
             raise ValueError('已批准的角色参考图文件发生变化')
         refs[-1].update(asset_id=actor['id'], version_id=version['id'],
                         source=approval['source'] if approval else '镜头绑定的角色资产',
-                        status='approved' if approval else 'legacy')
+                        view=pick_view, status='approved' if approval else 'legacy')
         position = ('左侧' if index == 1 else '右侧') if view == 'wide' else '主体'
         instructions.append(f"图{index}用于{position}人物{name}的面貌与衣着。保持参考图的脸型、发型、发色和服装颜色。造型：{version.get('description','')}。服装：{version.get('outfit') or '以角色图为准'}。")
 
@@ -696,12 +713,14 @@ def storyboard_packet(p,sid,model=fal_media.STORYBOARD, *, reference_mode='image
     if scenes:
         scene = bound_version(scenes[0])
         instructions.append(f"场景：{scene.get('name') or scenes[0]['name']}。{scene.get('description','')}。")
-        approval = approved.get(('scene', scenes[0]['id'], scene['id']))
-        if ark and approval:
-            add_reference('scene', approval['file'], '场景参考')
+        picks = visual.approved_refs(approvals, 'scene', scenes[0]['id'], scene['id'], scene)
+        if ark and picks:
+            pick_view, approval = picks[0]
+            add_reference('scene', approval['file'], '场景参考 · ' + visual.VIEW_LABELS.get(pick_view, '设定图'))
             if approval.get('sha256') and refs[-1]['reference_id']!=approval['sha256']:
                 raise ValueError('已批准的场景参考图文件发生变化')
-            refs[-1].update({k: approval[k] for k in ('asset_id', 'version_id', 'source')}, status='approved')
+            refs[-1].update({k: approval[k] for k in ('asset_id', 'version_id', 'source')},
+                            view=pick_view, status='approved')
             instructions.append(f'图{len(refs)}仅用于场景布局、建筑与环境灯光。')
     if reference_mode == 'image':
         add_reference('composition', ref['file'], '机位构图')
@@ -719,12 +738,14 @@ def storyboard_packet(p,sid,model=fal_media.STORYBOARD, *, reference_mode='image
             instructions.append('完整呈现主体及其周围环境，保留头顶和脚下空间。')
         else:
             instructions.append('完整呈现两人及其间距，左侧人物看画右，右侧人物看画左。')
-    style_ref = next((r for r in approved.values() if r['role'] == 'style'), None)
+    style_refs = visual.approved_refs(approvals, 'style')
+    style_ref = style_refs[0][1] if style_refs else None
     if ark and style_ref:
         add_reference('style', style_ref['file'], '画风参考')
         if style_ref.get('sha256') and refs[-1]['reference_id']!=style_ref['sha256']:
             raise ValueError('已批准的风格参考图文件发生变化')
-        refs[-1].update({k: style_ref[k] for k in ('asset_id', 'version_id', 'source')}, status='approved')
+        refs[-1].update({k: style_ref[k] for k in ('asset_id', 'version_id', 'source')},
+                        view=style_ref.get('view') or 'primary', status='approved')
         instructions.append(f'图{len(refs)}仅用于绘制技法、光影、色彩和细节层次。')
     instructions.append(f"镜头：{s['description']}。")
     if p['creative_brief']['style']:
@@ -759,18 +780,52 @@ def asset_image_packet(p, payload):
     instruction = payload.get('instruction')
     if not isinstance(instruction,str) or not 1<=len(instruction.strip())<=2000:
         raise ValueError('请填写不超过 2000 字的生成要求')
-    ref = version.get('file') or (version.get('views') or {}).get('three_quarter') or (version.get('views') or {}).get('front')
-    refs = [dict(file=ref, role=asset['kind'], reference_id=hashlib.sha256(media_path(ref).read_bytes()).hexdigest(),
-                 label=version['name']+' · 参考',asset_id=asset['id'],version_id=version['id'])] if ref else []
-    prompt = '生成可跨镜头复用的单人定妆参考。画内只有一人。' if asset['kind']=='character' else '生成可跨镜头复用的环境参考，表现地点布局、主要地标与灯光。'
     bible = p['creative_brief'].get('visual_bible', {})
-    art = ''.join(f'{label}：{bible[key]}。' for key,label in visual.DIRECTION.items() if bible.get(key))
+    views = {**({'primary': version['file']} if version.get('file') else {}), **(version.get('views') or {})}
+    approved_views = dict(visual.approved_refs(bible.get('references', []), asset['kind'],
+                                               asset['id'], version['id'], version))
+    refs = []
+    for view in visual.allowed_views(asset['kind']):
+        file = views.get(view)
+        if not file:
+            continue
+        if sum(1 for item in refs if item['role']==asset['kind']) >= 3:
+            break
+        digest = hashlib.sha256(media_path(file).read_bytes()).hexdigest()
+        approval = approved_views.get(view)
+        if approval and approval.get('sha256') and approval['sha256']!=digest:
+            raise ValueError('已批准的参考图文件发生变化')
+        refs.append(dict(file=file, role=asset['kind'], reference_id=digest,
+                         label=version['name']+' · '+visual.VIEW_LABELS.get(view,view),
+                         asset_id=asset['id'], version_id=version['id'], view=view))
+    style_refs = visual.approved_refs(bible.get('references', []), 'style')
+    style = style_refs[0][1] if style_refs else None
+    if style:
+        path = media_path(style['file'])
+        if style.get('sha256') and hashlib.sha256(path.read_bytes()).hexdigest()!=style['sha256']:
+            raise ValueError('已批准的风格参考图文件发生变化')
+        refs.append(dict(file=style['file'], role='style',
+                         reference_id=hashlib.sha256(path.read_bytes()).hexdigest(),
+                         label='作品统一画风', asset_id=style.get('asset_id'), version_id=style.get('version_id'),
+                         source=style.get('source'), view=style.get('view') or 'primary'))
+    if asset['kind']=='character':
+        prompt = ('生成一张电影级角色定妆参考：单人，四分之三角度，面部与服装清晰，简洁背景，柔和主光。'
+                  '参考图中的脸型、五官、发型、发色、肤色和服装必须保持一致。'
+                  '解剖结构准确，五官完整自然，皮肤与布料有真实质感；'
+                  '禁止低多边形、塑料感、简笔或动漫式简化五官、多余肢体、文字和水印。')
+    else:
+        prompt = ('生成一张电影级场景参考：展示地点布局、主要地标、建筑材质与主光方向，画内无人。'
+                  '参考图中的空间结构、地标和光线方向保持一致。'
+                  '透视与材质准确，细节层次清楚；禁止低多边形、塑料感、文字和水印。')
+    if style:
+        prompt += '最后一张参考图仅用于统一绘制技法、色彩和光影，不改变人物或场景本身的结构。'
     prompt += f"素材：{version['name']}。{version.get('description','')}。"
     if version.get('outfit'):
         prompt += f"服装：{version['outfit']}。"
     if p['creative_brief']['style']:
         prompt += f"画风：{p['creative_brief']['style']}。"
-    prompt += art + instruction.strip()
+    prompt += ''.join(f'{label}：{bible[key]}。' for key,label in visual.DIRECTION.items() if bible.get(key))
+    prompt += instruction.strip()
     packet = dict(id='asset-'+asset['id'], asset_id=asset['id'],version_id=version['id'],kind='image',mode='asset',
                   instruction=prompt,user_instruction=instruction,model=domestic_media.FLASH,provider='ark',
                   parameters={'aspect_ratio':'9:16' if asset['kind']=='character' else p['creative_brief']['format']},
@@ -1271,7 +1326,7 @@ def approve_asset_image(body):
             asset['selected_version']=version['id']
         bible=p['creative_brief'].setdefault('visual_bible',{})
         bible.setdefault('references',[]).append(dict(role=asset['kind'],asset_id=asset['id'],
-            version_id=version['id'],file=file,source='Seedream · '+body['job_id'],sha256=sha))
+            version_id=version['id'],file=file,view='primary',source='Seedream · '+body['job_id'],sha256=sha))
         return save(p,p['revision'])
 
 
@@ -1285,20 +1340,24 @@ def approve_imported_reference(body):
         file=body.get('file')
         if not version or not file or file not in [version.get('file'),*version.get('views',{}).values()]:
             raise ValueError('图片不属于选定素材版本')
+        view=body.get('view') or visual.view_of(version,file)
+        if view not in visual.allowed_views(asset['kind']):
+            raise ValueError('视图用途无效')
         source=body.get('source')
         if not isinstance(source,str) or not 1<=len(source.strip())<=500:
             raise ValueError('请填写图片来源')
         bible=p['creative_brief'].setdefault('visual_bible',{})
         refs=bible.setdefault('references',[])
         matches=[r for r in refs if (asset['kind']=='style' and r['role']=='style') or
-                 (r['asset_id']==asset['id'] and r['version_id']==version['id'])]
+                 (r['asset_id']==asset['id'] and r['version_id']==version['id']
+                  and (r.get('view') or visual.view_of(version,r['file']) or 'primary')==view)]
         if matches and body.get('replace') is not True:
-            raise ValueError('这个用途已有已批准参考，请确认替换')
+            raise ValueError('这个视图已有已批准参考，请确认替换')
         with media_path(file).open('rb') as stream:
             sha=hashlib.file_digest(stream,'sha256').hexdigest()
         refs[:]=[r for r in refs if r not in matches]
         refs.append(dict(role=asset['kind'],asset_id=asset['id'],version_id=version['id'],
-                         file=file,source=source.strip(),sha256=sha))
+                         file=file,view=view,source=source.strip(),sha256=sha))
         return save(p,p['revision'])
 
 

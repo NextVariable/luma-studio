@@ -472,11 +472,14 @@ async function basicProduction(box,p,s){
   if(!box.isConnected||L.ui.productionMode!=='basic')return;
   const decision=director.text;
   const approvals=decision.references?.filter(r=>r.status==='legacy')||[];
+  const approved=decision.references?.filter(r=>r.status==='approved')||[];
+  const hasStyle=decision.references?.some(r=>r.role==='style');
   box.innerHTML=`<div class="side-stack">
     <div><b>1. 检查人物和场景</b>
       ${decision.blocked?`<p class="muted">${esc(decision.blocked)}</p>`:
         decision.references.map(r=>`<p class="muted">${esc(r.label)} · ${esc(r.reason)}${r.status==='legacy'?' · 待确认参考图':''}</p>`).join('')}
-      ${approvals.length?'<button class="btn small" data-guide-assets>检查角色与场景</button>':''}</div>
+      <p class="faint" style="margin:4px 0 0">参考就绪：${approved.length} 张已批准${approvals.length?` · ${approvals.length} 张待批准`:''}${hasStyle?' · 已设画风参考':' · 未设作品画风'}</p>
+      <button class="btn small" data-guide-assets>检查角色、场景与画风</button></div>
     <div><b>2. 定机位并生成分镜</b><div class="row">
       <button class="btn small" data-guide-camera>调整机位</button>
       <button class="btn small" data-guide-image ${director.image?.blocked?'disabled':''}>构图图分镜</button>
@@ -484,7 +487,8 @@ async function basicProduction(box,p,s){
       ${director.image?.blocked?`<p class="faint" style="margin:4px 0 0">构图图分镜：${esc(director.image.blocked)}</p>`:''}</div>
     <div><b>3. 看候选并记录复核</b><div class="row">
       <button class="btn small" data-guide-review ${s.takes.some(t=>t.kind!=='audio')?'':'disabled'}>比较候选</button>
-      <button class="btn small" data-guide-video ${s.image?'':'disabled'}>Wan／海螺对照</button></div>
+      <button class="btn small" data-guide-video ${s.image?'':'disabled'}>Wan／海螺对照</button>
+      <button class="btn small" data-guide-revise ${s.takes.some(t=>t.kind!=='audio')?'':'disabled'}>单镜返工</button></div>
       <p class="faint" style="margin:4px 0 0">${s.takes.some(t=>t.kind!=='audio')?`${s.takes.filter(t=>t.kind!=='audio').length} 个候选${s.image?' · 已采用首帧':''}${s.video?' · 已采用视频':''}`:'还没有画面候选'}</p></div>
     <div><b>4. 配音、字幕和导出</b><div class="row">
       <button class="btn small" data-guide-dialogue>编辑对白</button>
@@ -496,6 +500,7 @@ async function basicProduction(box,p,s){
   prepare('[data-guide-image-text]',()=>L.storyboardQuote(s.id,undefined,'text'));
   prepare('[data-guide-review]',()=>compareCandidates(p,s));
   prepare('[data-guide-video]',()=>compareVideo(scope,s));
+  prepare('[data-guide-revise]',()=>reviseDialog(s));
   prepare('[data-guide-dialogue]',()=>{L.ui.tab='dialogue';L.render()});
   prepare('[data-guide-delivery]',()=>L.go('delivery'));
 }

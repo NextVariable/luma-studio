@@ -63,12 +63,15 @@ def arguments(kind, context, media_path):
     roles = [ref['role'] for ref in refs]
     if seg['model'] in STILL_MODELS and kind == 'image':
         if seg.get('mode')=='asset':
-            if roles not in ([], ['character'], ['scene']):
-                raise ValueError('角色或场景生成最多使用一张原版设定图')
+            subject = [role for role in roles if role != 'style']
+            if (len(subject) > 3 or len(set(subject)) > 1
+                    or any(role not in ('character', 'scene') for role in subject)
+                    or roles != subject + ['style'] * roles.count('style') or roles.count('style') > 1):
+                raise ValueError('角色或场景生成最多使用三张设定图，并可附加一张画风参考')
             size = '1440x2560' if seg['parameters']['aspect_ratio']=='9:16' else '2560x1440'
             body = dict(model=FLASH,prompt=seg['instruction'],size=size,response_format='url')
             if refs:
-                body['image']=[image_url(media_path(refs[0]['file']))]
+                body['image']=[image_url(media_path(ref['file'])) for ref in refs]
             return body
         count = roles.count('character')
         extras = roles[count:]
