@@ -16,7 +16,7 @@ from . import assembly
 from . import continuity
 from . import local_storage
 from . import openai_direct
-from . import blocking, visual, quality, comparison
+from . import blocking, visual, quality, comparison, evidence
 from . import sample_scene
 from . import generation_quote
 
@@ -1212,13 +1212,31 @@ def asset_image_candidates(body):
     if not any(a['id']==aid and a['kind'] in ('character','scene') for a in p['assets']):
         raise ValueError('素材不存在')
     with connect() as db:
-        rows=db.execute("""SELECT id, state, payload, result, error FROM jobs
+        rows=db.execute("""SELECT id, state, payload, result, error, created, updated FROM jobs
             WHERE project_id=? AND kind='asset_image'
             AND json_extract(payload,'$.snapshot.generation_segment.asset_id')=?
             ORDER BY created DESC LIMIT 100""",(p['id'],aid)).fetchall()
     adopted={v.get('source_job_id') for a in p['assets'] if a['id']==aid for v in a['versions']}
-    return [dict(id=r['id'],state=r['state'],file=json.loads(r['result'] or '{}').get('candidate_file'),
-                 error=r['error'],approved=r['id'] in adopted) for r in rows]
+    items=[]
+    for r in rows:
+        payload=json.loads(r['payload'] or '{}')
+        result=json.loads(r['result'] or '{}')
+        quote=payload.get('quote') or {}
+        items.append(dict(id=r['id'],state=r['state'],file=result.get('candidate_file'),
+                          error=r['error'],approved=r['id'] in adopted,
+                          created=r['created'],updated=r['updated'],
+                          model=quote.get('model') or payload.get('snapshot',{}).get('model'),
+                          estimated_cny=quote.get('estimated_cny'),
+                          actual_cny=result.get('actual_cny'),
+                          billing_status=result.get('billing_status'),
+                          request_id=result.get('provider_request_id') or result.get('run_id')))
+    return items
+
+
+def production_evidence(body):
+    p=project(body['project_id'])
+    with connect() as db:
+        return evidence.build(db,p)
 
 
 def approve_asset_image(body):
@@ -1232,19 +1250,25 @@ def approve_asset_image(body):
         if not row:
             raise ValueError('素材候选不存在')
         packet=json.loads(row['payload'])['snapshot']['generation_segment']
-        result=json.loads(row['result'])
-        asset=next((a for a in p['assets'] if a['id']==packet['asset_id']),None)
+        result=json.loads(row['result'] or '{}')
+        if body.get('asset_id') and body['asset_id']!=packet['asset_id']:
+            raise ValueError('候选不属于这个素材')
+        asset=next((a for a in p['assets'] if a['id']==packet['asset_id'] and a['kind'] in ('character','scene')),None)
         source=next((v for v in asset['versions'] if v['id']==packet['version_id']),None) if asset else None
         if not source:
             raise ValueError('原素材版本已不存在')
         if any(v.get('source_job_id')==body['job_id'] for v in asset['versions']):
             return p
-        file=result['candidate_file']
+        file=result.get('candidate_file')
+        if not file or not media_path(file).is_file():
+            raise ValueError('候选图片不存在，可能已被清理')
         sha=hashlib.sha256(media_path(file).read_bytes()).hexdigest()
         version=dict(source,id=uid(),created=time.time(),label='已批准的生成参考',file=file,views={},
                      source_job_id=body['job_id'])
         asset['versions'].append(version)
         asset['version']=len(asset['versions'])
+        if body.get('select') is True:
+            asset['selected_version']=version['id']
         bible=p['creative_brief'].setdefault('visual_bible',{})
         bible.setdefault('references',[]).append(dict(role=asset['kind'],asset_id=asset['id'],
             version_id=version['id'],file=file,source='Seedream · '+body['job_id'],sha256=sha))
@@ -1691,6 +1715,7 @@ class Handler(BaseHTTPRequestHandler):
             if path in ('/api/quality/open','/api/quality/record'):
                 return self.respond(candidate_review(body,path.endswith('/record')))
             if path=='/api/production':return self.respond(edit_production(body))
+            if path=='/api/production/evidence':return self.respond(production_evidence(body))
             if path=='/api/settings/spending':return self.respond(set_spending(body.get('remaining')))
             if path=='/api/director/references':return self.respond(director_references(body))
             if path=='/api/jobs/video-comparison':return self.respond(video_comparison(body))

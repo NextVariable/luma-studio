@@ -34,6 +34,7 @@ L.views.delivery=view=>{
         ${shown?`<span class="chip"><span class="dot ${shown===current?'ok':'wait'}"></span>${shown===current?'当前成片':'历史成片，之后镜头有改动'}</span><span class="faint num">${L.clock(shown.result.duration)}</span>`:''}
  <span class="spacer"></span>
         ${shown?`<a class="btn" href="${L.media(shown.result.file)}" download>下载 MP4</a>`:''}
+ <button class="btn" id="evidence">制作证据</button>
  <button class="btn primary" id="export" ${!r?.can_export||running?'disabled':''}>${running?'导出中…':current?'重新导出':'导出成片'}</button></div>
       ${!r?.can_export&&!running&&items.length?`<p class="faint">还有 ${blocked.length} 个镜头没有就绪，处理完交付清单中的问题后就能导出。</p>`:''}
       ${r?.can_export&&items.some(x=>x.dialogue_without_audio)?'<p class="faint">有镜头写了对白但没有配音，导出时会用画面原声或静音，并保留字幕。</p>':''}
@@ -47,6 +48,7 @@ L.views.delivery=view=>{
       ${films.length?`<section class="panel"><div class="panel-head"><h2>导出记录</h2></div><div class="panel-body"><div class="films">${films.map(f=>`<button class="film" data-film="${esc(f.job.id)}" ${f===shown?'aria-current="true"':''}><span class="dot ${f===current?'ok':''}"></span><span style="flex:1">${f===current?'当前成片':'历史成片'}</span><span class="faint num">${L.clock(f.result.duration)}</span><span class="faint">${L.timeAgo(f.job.updated)}</span></button>`).join('')}</div></div></section>`:''}
     </aside></div>`;
   $('#export',view).onclick=e=>L.busy(e.currentTarget,async()=>{await L.run('export',{episode_id:ep.id});L.toast('开始导出这一集');L.render()});
+  $('#evidence',view).onclick=e=>L.busy(e.currentTarget,()=>evidenceDialog(p.id));
   $$('.check',view).forEach(b=>b.onclick=()=>{
     const shotId=b.dataset.sid,tab=ACTION_TAB[b.dataset.action];
     if(L.goTo)return L.go('shots',{shotId,tab});
@@ -57,4 +59,35 @@ L.views.delivery=view=>{
   $$('.film',view).forEach(b=>b.onclick=()=>{L.ui.film=b.dataset.film;L.render()});
   $('#cont',view)?.addEventListener('click',()=>L.continuityDialog());
 };
+
+const CLASS_LABEL={local:'本机导入/合成',provider:'供应商记录',provider_unrecorded:'记录缺失'};
+async function evidenceDialog(projectId){
+  const report=await L.api('/api/production/evidence',{project_id:projectId});
+  const s=report.summary,cell='padding:7px 8px;border-bottom:1px solid rgba(255,255,255,.08);vertical-align:top';
+  const rows=report.items.map(item=>`<tr>
+    <td style="${cell}">${esc(item.episode_title||'')} · ${String(item.shot_number).padStart(2,'0')}</td>
+    <td style="${cell}">${item.kind==='image'?'图':'视频'}</td>
+    <td style="${cell}">${esc(item.model||'—')}</td>
+    <td style="${cell}"><span class="chip">${esc(CLASS_LABEL[item.evidence_class]||item.evidence_class)}</span></td>
+    <td style="${cell}">${item.request_id?esc(String(item.request_id).slice(0,14)):'—'}</td>
+    <td style="${cell}">${item.reviewed?`${esc(Object.values(item.review_scores||{}).join(' / '))}${item.review_matches_shot?'':' · 镜头已变更'}`:'未评分'}</td>
+    <td style="${cell} num">${item.actual_cny?`¥${esc(item.actual_cny)}`:item.estimated_cny?`估价 ¥${esc(item.estimated_cny)}`:'—'}</td>
+    <td style="${cell}">${item.selected?'<span class="chip">已采用</span>':''}</td></tr>`).join('');
+  const m=L.modal({title:'制作证据',wide:true,body:`
+    <p class="faint" style="margin-top:0">${esc(report.disclaimer)}</p>
+    <div class="row wrap"><span class="chip">${s.shots} 镜</span><span class="chip">${s.shots_with_visual} 有画面</span>
+      <span class="chip">${s.shots_reviewed} 已人工复核</span><span class="chip">${s.provider} 供应商记录</span>
+      <span class="chip">${s.local} 本机导入</span><span class="chip">${s.provider_unrecorded} 记录缺失</span>
+      <span class="chip">实扣 ¥${esc(s.actual_cny)}</span></div>
+    ${rows?`<div style="overflow:auto;max-height:46vh;margin-top:10px"><table style="width:100%;border-collapse:collapse;font-size:12px">
+      <thead><tr>${['集·镜','类型','模型','证据来源','请求号','人工评分','费用','状态'].map(x=>`<th style="text-align:left;padding:7px 8px;border-bottom:1px solid rgba(255,255,255,.2)">${x}</th>`).join('')}</tr></thead>
+      <tbody>${rows}</tbody></table></div>`:'<p class="faint">还没有画面或视频候选。</p>'}`,
+    foot:'<button class="btn" data-download>下载 JSON</button><button class="btn" data-close>关闭</button>'});
+  $('[data-download]',m).onclick=()=>{
+    const blob=new Blob([JSON.stringify(report,null,2)],{type:'application/json'});
+    const link=document.createElement('a');link.href=URL.createObjectURL(blob);
+    link.download=(report.title||'project')+'-制作证据.json';document.body.append(link);link.click();link.remove();
+    setTimeout(()=>URL.revokeObjectURL(link.href),1000);
+  };
+}
 })();

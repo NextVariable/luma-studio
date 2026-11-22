@@ -479,7 +479,9 @@ async function basicProduction(box,p,s){
       ${approvals.length?'<button class="btn small" data-guide-assets>检查角色与场景</button>':''}</div>
     <div><b>2. 定机位并生成分镜</b><div class="row">
       <button class="btn small" data-guide-camera>调整机位</button>
-      <button class="btn small" data-guide-image ${decision.blocked?'disabled':''}>查看分镜报价</button></div></div>
+      <button class="btn small" data-guide-image ${director.image?.blocked?'disabled':''}>构图图分镜</button>
+      <button class="btn small" data-guide-image-text ${decision.blocked?'disabled':''}>文字机位分镜</button></div>
+      ${director.image?.blocked?`<p class="faint" style="margin:4px 0 0">构图图分镜：${esc(director.image.blocked)}</p>`:''}</div>
     <div><b>3. 看候选并记录复核</b><div class="row">
       <button class="btn small" data-guide-review ${s.takes.some(t=>t.kind!=='audio')?'':'disabled'}>比较候选</button>
       <button class="btn small" data-guide-video ${s.image?'':'disabled'}>Wan／海螺对照</button></div></div>
@@ -489,7 +491,8 @@ async function basicProduction(box,p,s){
   const prepare=(selector,action)=>{const button=$(selector,box);if(button)button.onclick=e=>L.busy(e.currentTarget,action)};
   prepare('[data-guide-assets]',()=>L.go('cast'));
   prepare('[data-guide-camera]',()=>L.shotCamera(s));
-  prepare('[data-guide-image]',()=>L.storyboardQuote(s.id,undefined,'text'));
+  prepare('[data-guide-image]',()=>L.storyboardQuote(s.id,undefined,'image'));
+  prepare('[data-guide-image-text]',()=>L.storyboardQuote(s.id,undefined,'text'));
   prepare('[data-guide-review]',()=>compareCandidates(p,s));
   prepare('[data-guide-video]',()=>compareVideo(scope,s));
   prepare('[data-guide-dialogue]',()=>{L.ui.tab='dialogue';L.render()});
