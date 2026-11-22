@@ -6,6 +6,8 @@ import time
 import uuid
 from . import creative
 
+from . import visual
+
 LEGACY_SHOT_FIELDS = ('description', 'duration', 'framing', 'camera', 'dialogue', 'lines', 'asset_ids', 'asset_bindings', 'continuity_from')
 SHOT_FIELDS = LEGACY_SHOT_FIELDS + ('creative_spec',)
 FRAME_MODES = ('references', 'start_own', 'start_continuity')  # how a video starts; not part of the text plan basis
@@ -74,6 +76,7 @@ def validate(p, media_path):
             for file in views.values():media_path(file)
             if not isinstance(v.get('outfit',''),str) or len(v.get('outfit',''))>200:raise ValueError('服装名称最多 200 字')
             if v.get('voice_id','alloy') not in VOICE_IDS:raise ValueError('角色音色无效')
+    visual.validate_bible(brief, assets, media_path)
     for s in p['shots']:
         ids=[t['id'] for t in s['takes']]
         if len(ids)!=len(set(ids)):raise ValueError('素材候选 ID 重复')

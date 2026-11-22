@@ -14,7 +14,7 @@ from . import assembly
 from . import continuity
 from . import local_storage
 from . import openai_direct
-from . import blocking
+from . import blocking, visual
 from . import sample_scene
 from . import generation_quote
 
@@ -611,7 +611,9 @@ def discard_upload(name):
     path.unlink()
     return {'discarded':name}
 
-def storyboard_packet(p,sid,model=fal_media.STORYBOARD):
+def storyboard_packet(p,sid,model=fal_media.STORYBOARD, *, reference_mode='image'):
+    if reference_mode not in ('image', 'text') or (reference_mode == 'text' and model not in domestic_media.STILL_MODELS):
+        raise ValueError('仅 Seedream 分镜支持纯文字机位')
     if model != fal_media.STORYBOARD and model not in domestic_media.STILL_MODELS:
         raise ValueError('分镜模型无效')
     s=preparation.shot_of(p,sid)
@@ -622,7 +624,7 @@ def storyboard_packet(p,sid,model=fal_media.STORYBOARD):
     if view not in blocking.PRESETS:
         raise ValueError('机位无效，请重新保存构图')
     framing = s.get('framing') or '中景'
-    if view != 'wide' and ref.get('spec') != blocking.composition_spec(view, framing, p['creative_brief']['format'] == '9:16'):
+    if reference_mode == 'image' and view != 'wide' and ref.get('spec') != blocking.composition_spec(view, framing, p['creative_brief']['format'] == '9:16'):
         raise ValueError('请打开机位并重新保存单人构图，以匹配当前景别与画幅')
     slots = blocking.visible_slots(view)
     actors = [ref['actors'][slot] for slot in slots]
@@ -632,6 +634,9 @@ def storyboard_packet(p,sid,model=fal_media.STORYBOARD):
     versions = []
     refs = []
     instructions = ['绘制一张完成的漫剧分镜。']
+    bible = p['creative_brief'].get('visual_bible', {})
+    approved = {(r['role'], r['asset_id'], r['version_id']): r for r in bible.get('references', [])}
+    ark = model in domestic_media.STILL_MODELS
 
     def bound_version(asset):
         version = next((v for v in asset['versions'] if v['id'] == bindings.get(asset['id'])), None)
@@ -656,12 +661,15 @@ def storyboard_packet(p,sid,model=fal_media.STORYBOARD):
     for index, actor in enumerate(actors, 1):
         version = bound_version(assets[actor['id']])
         views = version.get('views') or {}
-        portrait = version.get('file') or views.get('three_quarter') or views.get('front')
+        approval = approved.get(('character', actor['id'], version['id']))
+        portrait = approval['file'] if approval else version.get('file') or views.get('three_quarter') or views.get('front')
         name = version.get('name') or actor['name']
         if not portrait:
             raise ValueError(f'请为{name}当前绑定的造型添加角色参考图')
         add_reference('character', portrait, name + ' · 角色参考')
-        refs[-1].update(asset_id=actor['id'], version_id=version['id'])
+        refs[-1].update(asset_id=actor['id'], version_id=version['id'],
+                        source=approval['source'] if approval else '镜头绑定的角色资产',
+                        status='approved' if approval else 'legacy')
         position = ('左侧' if index == 1 else '右侧') if view == 'wide' else '主体'
         instructions.append(f"图{index}用于{position}人物{name}的面貌与衣着。保持参考图的脸型、发型、发色和服装颜色。造型：{version.get('description','')}。服装：{version.get('outfit') or '以角色图为准'}。")
 
@@ -672,9 +680,36 @@ def storyboard_packet(p,sid,model=fal_media.STORYBOARD):
     if scenes:
         scene = bound_version(scenes[0])
         instructions.append(f"场景：{scene.get('name') or scenes[0]['name']}。{scene.get('description','')}。")
-    add_reference('composition', ref['file'], '机位构图')
-    instructions.append(f"图{len(refs)}仅用于人物站位、视线、景别和机位。背景依照镜头与场景设定绘制。"
-                        f"镜头：{s['description']}。画风：{p['creative_brief']['style']}。")
+        approval = approved.get(('scene', scenes[0]['id'], scene['id']))
+        if ark and approval:
+            add_reference('scene', approval['file'], '场景参考')
+            refs[-1].update({k: approval[k] for k in ('asset_id', 'version_id', 'source')}, status='approved')
+            instructions.append(f'图{len(refs)}仅用于场景布局、建筑与环境灯光。')
+    if reference_mode == 'image':
+        add_reference('composition', ref['file'], '机位构图')
+        refs[-1].update(source='本地机位预演', status='composition_only')
+        instructions.append(f"图{len(refs)}仅用于站位、视线、景别与机位。"
+                            "成图独立绘制，来自预演的人偶、色块、纹理和多边形轮廓无需保留。")
+    else:
+        instructions.append('依据文字构图，背景依照场景设定绘制。')
+        if view != 'wide':
+            side = '左' if view == 'left' else '右'
+            crop = {'中景': '腰部以上', '中近景': '胸口以上', '近景': '肩部以上',
+                    '特写': '脸部为主', '大特写': '局部面部细节'}.get(framing, '依景别裁切')
+            instructions.append(f'主体位于画{side}三分线附近，{crop}，朝视线方向留出空间。')
+        else:
+            instructions.append('完整呈现两人及其间距，左侧人物看画右，右侧人物看画左。')
+    style_ref = next((r for r in approved.values() if r['role'] == 'style'), None)
+    if ark and style_ref:
+        add_reference('style', style_ref['file'], '画风参考')
+        refs[-1].update({k: style_ref[k] for k in ('asset_id', 'version_id', 'source')}, status='approved')
+        instructions.append(f'图{len(refs)}仅用于绘制技法、光影、色彩和细节层次。')
+    instructions.append(f"镜头：{s['description']}。")
+    if p['creative_brief']['style']:
+        instructions.append(f"画风：{p['creative_brief']['style']}。")
+    for key, label in visual.DIRECTION.items():
+        if bible.get(key):
+            instructions.append(f'{label}：{bible[key]}。')
     if offscreen:
         instructions.append(f"动作描述中提到的{offscreen[0]['name']}始终在画外，不入镜。")
     instructions.append('保持本场既定空间、主光方向和人物相对位置；角色外观只取自角色参考图。')
@@ -684,7 +719,7 @@ def storyboard_packet(p,sid,model=fal_media.STORYBOARD):
     return dict(id='storyboard-'+sid,shot_id=sid,start=0,end=s['duration'],duration=s['duration'],
                 kind='image',mode='storyboard',provider=domestic_media.PROVIDER.get(model, 'fal'),model=model,
                 references=refs,parameters={'aspect_ratio':p['creative_brief']['format']},
-                instruction=prompt,staging=staging,plan_digest=production.digest([refs,prompt,versions,ref['camera'],staging]))
+                instruction=prompt,staging=staging,reference_mode=reference_mode,plan_digest=production.digest([refs,prompt,versions,ref['camera'],staging]))
 
 
 def job_request(pid,kind,payload,*,quoting=False):
@@ -704,7 +739,8 @@ def job_request(pid,kind,payload,*,quoting=False):
     expected_plan=payload.get('preparation_digest')
     if kind in ('image','video'):
         if kind=='image' and payload.get('storyboard') is True:
-            packet=storyboard_packet(p,snapshot['target_shot_id'],payload.get('model',fal_media.STORYBOARD))
+            packet=storyboard_packet(p,snapshot['target_shot_id'],payload.get('model',fal_media.STORYBOARD),
+                                     reference_mode=payload.get('storyboard_reference_mode','image'))
         else:packet=preparation.freeze(p,snapshot['target_shot_id'],kind,payload.get('segment_id'),media_path,None if quoting else lambda k:bool(key_for(k)))
         if expected_plan is not None and expected_plan!=packet['plan_digest']:
             raise ValueError('制作准备已变更，请重新打开并确认后生成')
@@ -1140,7 +1176,8 @@ def work_once():
                     frozen=payload.get('generation_unit',{}).get('segment')
                     if not frozen:raise ValueError('旧媒体任务没有片段制作准备，拒绝直接提交')
                     if frozen['mode']=='storyboard':
-                        current_packet=storyboard_packet(current,frozen['shot_id'],frozen['model'])
+                        current_packet=storyboard_packet(current,frozen['shot_id'],frozen['model'],
+                                                         reference_mode=frozen.get('reference_mode','image'))
                     else:current_packet=preparation.freeze(current,frozen['shot_id'],row['kind'],frozen['id'],media_path,lambda k:bool(key_for(k)))
                     if current_packet!=frozen:raise ValueError('制作准备或模型能力已变化，请重新确认片段')
                 if not production.fresh(current,payload['snapshot']):raise ValueError('来源镜头或承接状态已变化，未提交生成，请重新准备')

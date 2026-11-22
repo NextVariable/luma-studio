@@ -6,6 +6,7 @@ let scriptPanel='text';
 
 L.views.script=view=>{
   const p=L.project(),ep=L.episode(),r=L.ready(),brief=p.creative_brief||{format:'16:9',method:'mixed',style:''};
+  const direction={palette:'色彩与光线',wardrobe:'服装连续性',camera:'摄影与景别'};
   const words=t=>t.replace(/\s/g,'').length;
   const cont=r?.continuity;
   view.innerHTML=`<div class="desk" data-script-panel="${scriptPanel}">
@@ -33,6 +34,10 @@ L.views.script=view=>{
    <div class="field"><span>画幅</span><div class="seg" id="fmt">${['16:9','9:16'].map(f=>`<button data-f="${f}" aria-pressed="${(brief.format||'16:9')===f}">${f==='16:9'?'横屏 16:9':'竖屏 9:16'}</button>`).join('')}</div></div>
           <label class="field"><span>制作方式</span><select class="select" id="method" data-track>${Object.entries(METHODS).map(([k,v])=>`<option value="${k}" ${brief.method===k?'selected':''}>${v}</option>`).join('')}</select></label>
    <label class="field"><span>统一视觉风格</span><textarea class="textarea" id="style" data-track rows="3" maxlength="2000" placeholder="例如：赛璐璐风格，夜景偏冷色，服装沿用角色设定。">${esc(brief.style||'')}</textarea></label>
+   <details>
+     <summary>视觉设定</summary>
+     ${Object.entries(direction).map(([key,label])=>`<label class="field"><span>${label}</span><textarea class="textarea" data-direction="${key}" data-track rows="2" maxlength="1000">${esc(brief.visual_bible?.[key]||'')}</textarea></label>`).join('')}
+   </details>
    <p class="faint" style="margin:0">修改画幅、风格或制作方式后，已有镜头需要重新确认。</p>
           <button class="btn" id="save-brief" style="align-self:flex-start">保存设定</button>
         </div></section>
@@ -71,7 +76,11 @@ L.views.script=view=>{
   let fmt=brief.format||'16:9';
   $$('#fmt button',view).forEach(b=>b.onclick=()=>{fmt=b.dataset.f;L.S.dirty=true;$$('#fmt button',view).forEach(x=>x.setAttribute('aria-pressed',x===b))});
   $('#save-brief',view).onclick=e=>L.busy(e.currentTarget,async()=>{
-    await L.save(p2=>{p2.creative_brief={...p2.creative_brief,format:fmt,method:$('#method',view).value,style:$('#style',view).value}});
+    const visualDirection=Object.fromEntries($$('[data-direction]',view).map(input=>[input.dataset.direction,input.value.trim()]));
+    await L.save(p2=>{
+      const visual_bible={...p2.creative_brief.visual_bible,...visualDirection};
+      p2.creative_brief={...p2.creative_brief,format:fmt,method:$('#method',view).value,style:$('#style',view).value,visual_bible};
+    });
     L.toast('创作设定已保存');L.render();
   });
   $('#cont-open',view)?.addEventListener('click',()=>L.continuityDialog());

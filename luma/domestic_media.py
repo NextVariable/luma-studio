@@ -49,7 +49,13 @@ def arguments(kind, context, media_path):
     seg = context['generation_segment']
     refs = seg['references']
     roles = [ref['role'] for ref in refs]
-    if seg['model'] in STILL_MODELS and kind == 'image' and roles in (['character', 'composition'], ['character', 'character', 'composition']):
+    if seg['model'] in STILL_MODELS and kind == 'image':
+        count = roles.count('character')
+        extras = roles[count:]
+        composition = ['composition'] if seg.get('reference_mode', 'image') == 'image' else []
+        expected = ['character'] * count + (['scene'] if 'scene' in extras else []) + composition + (['style'] if 'style' in extras else [])
+        if count not in (1, 2) or roles != expected:
+            raise ValueError('分镜参考图的用途或顺序无效')
         size = {'16:9': '2560x1440', '9:16': '1440x2560'}[seg['parameters']['aspect_ratio']]
         body = dict(model=seg['model'], prompt=seg['instruction'], size=size, response_format='url',
                     image=[image_url(media_path(r['file'])) for r in refs])
@@ -76,9 +82,12 @@ def request(provider, path, body=None):
                                  data=json.dumps(body).encode() if body is not None else None, headers=headers)
     try:
         with open_request(req, timeout=180) as response:
+            request_id = response.headers.get('X-Request-Id') or response.headers.get('X-Tt-Logid')
             result = json.loads(response.read(2_000_001))
         if not isinstance(result, dict):
             raise ValueError()
+        if provider == 'ark' and request_id:
+            result['provider_request_id'] = request_id
         return result
     except urllib.error.HTTPError as error:
         if error.code < 500 and error.code != 429:
@@ -102,6 +111,9 @@ class DomesticMedia:
             if not isinstance(images, list) or len(images) != 1 or not isinstance(images[0], dict):
                 raise UncertainRun('未取得预期的一张分镜，请检查方舟生成记录')
             output = completed(images[0].get('url'))
+            output.update(provider_request_id=result.get('provider_request_id') or result.get('request_id'),
+                          model=result.get('model') or body['model'], usage=result.get('usage'),
+                          billing_status='unreconciled')
             on_progress(output)
             return output
         result = request('dashscope', '/api/v1/services/aigc/video-generation/video-synthesis', body)

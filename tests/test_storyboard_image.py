@@ -170,3 +170,58 @@ class StoryboardImageTests(TestCase):
             if view != 'wide':
                 self.assertNotEqual(png, blocking.render(camera,actors,framing='近景'))
                 self.assertEqual(center(pixels, '443c40') > center(pixels, '252f39'), view=='left')
+
+    def test_visual_bible_and_text_composition(self):
+        with TemporaryDirectory() as tmp, patch.multiple(
+                studio, DATA=Path(tmp), MEDIA=Path(tmp)/'media', DB=Path(tmp)/'studio.sqlite'
+        ), patch('socket.socket.connect', side_effect=AssertionError('unexpected network')):
+            studio.init()
+            p = sample_scene.create(studio.MEDIA, studio.save)
+            shot = p['shots'][1]
+            scene = p['assets'][-1]
+            scene['versions'][0]['file'] = shot['image']
+            style = dict(id='style', kind='style', name='赛璐璐', description='')
+            p['assets'].append(style)
+            from luma import production
+            production.normalize(p)
+            style['versions'][0]['file'] = p['shots'][2]['image']
+            approved = [dict(role=a['kind'], asset_id=a['id'], version_id=a['selected_version'],
+                             source='本地测试素材', file=a['versions'][0]['file']) for a in (scene, style)]
+            request = dict(shot_id=shot['id'], episode_id=shot['episode_id'], storyboard=True,
+                           model=domestic_media.FLASH)
+            old = studio.preview_job_quote(p['id'], 'image', request)
+            text = studio.preview_job_quote(p['id'], 'image', dict(request, storyboard_reference_mode='text'))
+            self.assertEqual([r['role'] for r in text['references']], ['character'])
+            self.assertNotEqual(text['digest'], old['digest'])
+            self.assertEqual(text['estimated_cny'], old['estimated_cny'])
+            # Use new versions to add images to persisted assets.
+            scene['versions'][0]['file'] = None
+            scene['versions'].append(dict(scene['versions'][0], id='scene-art', file=approved[0]['file']))
+            approved[0]['version_id'] = shot['asset_bindings'][scene['id']] = 'scene-art'
+            p['creative_brief']['visual_bible'] = dict(palette='冷蓝背景', references=approved)
+            p = studio.save(p, p['revision'])
+            packet = studio.storyboard_packet(p, shot['id'], domestic_media.FLASH, reference_mode='text')
+            self.assertEqual([r['role'] for r in packet['references']], ['character', 'scene', 'style'])
+            body = domestic_media.arguments('image', {'generation_segment':packet}, studio.media_path)
+            self.assertEqual(len(body['image']), 3)
+            self.assertIn('腰部以上', body['prompt'])
+            self.assertIn('冷蓝背景', body['prompt'])
+            self.assertIn('图2仅用于场景布局', body['prompt'])
+            self.assertIn('图3仅用于绘制技法', body['prompt'])
+            self.assertEqual(studio.project(p['id'])['shots'][1]['selected_takes'], shot['selected_takes'])
+            with patch.dict(os.environ, ARK_API_KEY='offline-fixture'), patch.object(
+                    domestic_media, 'request', return_value={'data':[{'url':'https://fixture.invalid/image'}]}
+            ) as transport, patch('luma.media_bridge.receive', return_value=shot['image']):
+                request['storyboard_reference_mode'] = 'text'
+                quote = studio.preview_job_quote(p['id'], 'image', request)
+                studio.set_spending(1)
+                job = studio.enqueue(p['id'], 'image', dict(request, quote_digest=quote['digest']), 'text-test')
+                studio.work_once()
+                with studio.connect() as db:
+                    row = db.execute('SELECT state,error FROM jobs WHERE id=?',(job,)).fetchone()
+                self.assertEqual(row['state'], 'succeeded', row['error'])
+                transport.assert_called_once_with('ark', '/api/v3/images/generations', body)
+                result = studio.project(p['id'])['shots'][1]
+                self.assertEqual(result['selected_takes'], shot['selected_takes'])
+                self.assertTrue(any(t.get('job_id') == job for t in result['takes']))
+            self.assertEqual(studio.spending()['used'], 1)
