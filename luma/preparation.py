@@ -62,6 +62,25 @@ def catalog(p,s):
     return items
 
 
+def approval_review(refs):
+    """Asset references in one segment, split by approval state.
+
+    Unapproved asset views may only enter a formal request after an explicit,
+    per-request confirmation; they are never promoted to approvals by generating.
+    """
+    used=[];unapproved=[]
+    for ref in refs:
+        if ref.get('source')!='asset':continue
+        row={key:ref.get(key) for key in ('role','asset_id','version_id','view','file','approval_status','label')}
+        used.append(row)
+        if row['approval_status']=='unapproved':unapproved.append(row)
+    notice=''
+    if unapproved:
+        notice=('本次生成将使用未批准的资产参考图：'+'、'.join(dict.fromkeys(r['label'] for r in unapproved))
+                +'。这些视图不会写入批准记录，只进入本次请求。')
+    return dict(used=used,unapproved=unapproved,requires_confirmation=bool(unapproved),notice=notice)
+
+
 def seed(p,sid,kind='video'):
     if kind not in MODES:raise ValueError('制作类型无效')
     s=shot_of(p,sid)
@@ -125,7 +144,7 @@ def current_issue(p,s):
     return None
 
 
-def report(p,sid,media_path,connected=None,profiles=None):
+def report(p,sid,media_path,connected=None,profiles=None,allow_unapproved=False):
     s=shot_of(p,sid);plan=s.get('preparation');errors=[];rows=[]
     def error(message,segment_id=None):errors.append({'segment_id':segment_id,'message':message})
     if not plan:return {'ready':False,'issues':[{'segment_id':None,'message':'尚未保存制作准备'}],'segments':[]}
@@ -146,10 +165,12 @@ def report(p,sid,media_path,connected=None,profiles=None):
     for seg in plan['segments']:
         sid2=seg['id'];duration=seg['end']-seg['start'];refs=[{**available[r['reference_id']],'role':r['role']} for r in seg['references']]
         counts={role:sum(r['role']==role for r in refs) for role in ROLES};mode=seg['mode'];profile=profiles.get(seg['model'])
-        if 'references' in (p['creative_brief'].get('visual_bible') or {}) and any(
-            not r.get('approved') and r['source']=='asset' for r in refs
-        ):
-            error('选择的资产参考视图尚未批准，请先在素材中批准',sid2)
+        # Every formal path shares one gate: a version that never recorded approvals
+        # (legacy works included) cannot send unapproved asset views silently.
+        approval=approval_review(refs)
+        if approval['unapproved'] and not allow_unapproved:
+            error('资产参考视图尚未批准：'+'、'.join(dict.fromkeys(r['label'] for r in approval['unapproved']))
+                  +'；请先在素材中批准，或确认本次使用未批准视图',sid2)
         if len(refs)>10:error('当前工作流最多接收10个参考文件，不能静默截断',sid2)
         if not seg['instruction'].strip():error('请明确这一片段的动作要求',sid2)
         if len(plan['segments'])>1:
@@ -190,12 +211,15 @@ def report(p,sid,media_path,connected=None,profiles=None):
         if connected is not None:
             service_ready = bool(fal_media.key()) if profile and profile.get('provider') == 'fal' else bool(domestic_media.key(profile['provider'])) if profile and profile.get('provider') in domestic_media.KEYS else connected(seg['kind'])
             if not service_ready:error('对应生成服务尚未连接',sid2)
-        rows.append({'id':sid2,'start':seg['start'],'end':seg['end'],'duration':duration,'kind':seg['kind'],'model':seg['model'],'mode':mode,'parameters':copy.deepcopy(seg['parameters']),'references':refs})
+        approval['allow_unapproved']=bool(approval['unapproved']) and allow_unapproved
+        if approval['allow_unapproved']:
+            approval['requires_confirmation']=False
+        rows.append({'id':sid2,'start':seg['start'],'end':seg['end'],'duration':duration,'kind':seg['kind'],'model':seg['model'],'mode':mode,'parameters':copy.deepcopy(seg['parameters']),'references':refs,'approval':approval})
     return {'ready':not errors,'issues':errors,'segments':rows,'plan_digest':creative.digest(plan),'operation_count':len(rows)}
 
 
-def freeze(p,sid,kind,segment_id,media_path,connected):
-    result=report(p,sid,media_path,connected)
+def freeze(p,sid,kind,segment_id,media_path,connected,allow_unapproved=False):
+    result=report(p,sid,media_path,connected,allow_unapproved=allow_unapproved)
     if not result['ready']:raise ValueError('制作准备未就绪：'+'；'.join(dict.fromkeys(i['message'] for i in result['issues'])))
     s=shot_of(p,sid);segments=s['preparation']['segments']
     if not segment_id and len(segments)!=1:raise ValueError('请指定本次生成片段，不能将多片段当作整镜提交')

@@ -26,6 +26,8 @@ DATA_ENV = os.environ.get('LUMA_DATA') or os.environ.get('AUTEUR_DATA')
 DATA = Path(DATA_ENV) if DATA_ENV else ROOT/'data'
 MEDIA = DATA/'media'
 DB = DATA/'studio.sqlite'
+# A confirmed quote is valid for one local session window; long-stale prices must be re-read.
+QUOTE_TTL = 30*60
 LOCK = threading.RLock()
 # An explicit data directory is a separate library and keeps its own Dify settings.
 DATA_ISOLATED = DATA_ENV is not None
@@ -46,6 +48,7 @@ def init():
         CREATE TABLE IF NOT EXISTS import_previews(id TEXT PRIMARY KEY, digest TEXT NOT NULL, body TEXT NOT NULL, created REAL, applied_project_id TEXT);
         CREATE TABLE IF NOT EXISTS candidate_reviews(project_id TEXT NOT NULL, shot_id TEXT NOT NULL, take_id TEXT NOT NULL, body TEXT NOT NULL);
         CREATE INDEX IF NOT EXISTS candidate_reviews_shot ON candidate_reviews(project_id,shot_id);
+        CREATE TABLE IF NOT EXISTS quotes(digest TEXT PRIMARY KEY, created REAL NOT NULL);
         INSERT OR IGNORE INTO spending VALUES(1,0,0);
         ''')
         c.execute("UPDATE jobs SET state='interrupted',error='服务重启；外部调用结果待核实，避免重复收费',updated=? WHERE state IN ('running','submitting')",(time.time(),))
@@ -72,6 +75,15 @@ def project(pid):
 
 def spending():
     with connect() as c:return dict(c.execute('SELECT remaining,used FROM spending WHERE id=1').fetchone())
+
+def remember_quote(digest):
+    with connect() as c:
+        c.execute('DELETE FROM quotes WHERE created<?',(time.time()-7*86400,))
+        c.execute('INSERT OR REPLACE INTO quotes VALUES(?,?)',(digest,time.time()))
+
+def quote_age(digest):
+    with connect() as c:row=c.execute('SELECT created FROM quotes WHERE digest=?',(digest,)).fetchone()
+    return None if not row else time.time()-row['created']
 
 def set_spending(limit):
     if type(limit) is not int or not 0<=limit<=20:raise ValueError('每批授权 0–20 次外部工作流操作；0 表示暂停')
@@ -227,7 +239,7 @@ def add_shot(pid, episode_id, expected, fields):
         production.update_plan_links(p,episode_id)
         return {'project':save(p,expected),'shot_id':s['id']}
 
-def open_preparation(pid,sid,kind='video'):
+def open_preparation(pid,sid,kind='video',allow_unapproved=False):
     p=project(pid);s=preparation.shot_of(p,sid)
     draft=copy.deepcopy(s.get('preparation') or preparation.seed(p,sid,kind))
     needs_confirmation=bool(preparation.current_issue(p,s))
@@ -243,9 +255,10 @@ def open_preparation(pid,sid,kind='video'):
                           for a in p['assets'] if a['kind']=='character' and a['id'] in s['asset_bindings']],
             'references':preparation.catalog(p,s),'fal_configured':bool(fal_media.key()),
             'domestic_configured':{name:bool(domestic_media.key(name)) for name in domestic_media.KEYS},
+            'allow_unapproved':bool(allow_unapproved),
             'models':{name:{**copy.deepcopy(model),'connected':bool(fal_media.key() if model.get('provider')=='fal' else domestic_media.key(model['provider']) if model.get('provider') in domestic_media.KEYS else key_for(model['kind']))}
                       for name,model in preparation.MODELS.items()},
-            'status':preparation.report(p,sid,media_path,lambda kind:bool(key_for(kind)))}
+            'status':preparation.report(p,sid,media_path,lambda kind:bool(key_for(kind)),allow_unapproved=allow_unapproved)}
 
 def save_preparation(pid,sid,expected,plan,source_basis):
     with LOCK:
@@ -879,7 +892,9 @@ def job_request(pid,kind,payload,*,quoting=False):
         elif kind=='image' and payload.get('storyboard') is True:
             packet=storyboard_packet(p,snapshot['target_shot_id'],payload.get('model',fal_media.STORYBOARD),
                                      reference_mode=payload.get('storyboard_reference_mode','image'))
-        else:packet=preparation.freeze(p,snapshot['target_shot_id'],kind,payload.get('segment_id'),media_path,None if quoting else lambda k:bool(key_for(k)))
+        else:packet=preparation.freeze(p,snapshot['target_shot_id'],kind,payload.get('segment_id'),media_path,
+                                        None if quoting else lambda k:bool(key_for(k)),
+                                        allow_unapproved=payload.get('allow_unapproved') is True)
         if expected_plan is not None and expected_plan!=packet['plan_digest']:
             raise ValueError('制作准备已变更，请重新打开并确认后生成')
         refs=packet['references'];selected={(r['reference_id'],r['role']) for r in refs}
@@ -929,11 +944,12 @@ def preview_job_quote(pid,kind,payload):
         quote.update(references=packet['references'],configured=bool(domestic_media.key(packet['provider'])))
         if packet.get('approval'):
             quote.update(approval=packet['approval'],
-                         excluded_references=packet['approval']['excluded'],
+                         excluded_references=packet['approval'].get('excluded',[]),
                          requires_approval=packet['approval']['requires_confirmation'],
-                         approval_notice=('这个版本还有未批准的视图，它们不会进入本次模型请求。'
-                                          '如需使用，必须在报价中明确确认。'
-                                          if packet['approval']['requires_confirmation'] else ''),
+                         approval_notice=(packet['approval'].get('notice') or
+                                          ('这个版本还有未批准的视图，它们不会进入本次模型请求。'
+                                           '如需使用，必须在报价中明确确认。'
+                                           if packet['approval']['requires_confirmation'] else '')),
                          art_label=packet.get('art_label'))
     elif packet and packet['provider']=='fal':
         fal_media.arguments(kind,snapshot,media_path)
@@ -943,6 +959,7 @@ def preview_job_quote(pid,kind,payload):
         quote.update(comparison_id=packet['comparison_id'], duration=packet['duration'],
                      resolution=packet['parameters']['resolution'])
     if kind=='asset_image':quote['prompt']=packet['instruction']
+    remember_quote(quote['digest'])
     return quote
 
 
@@ -960,6 +977,10 @@ def enqueue(pid,kind,payload,nonce,*,connection=None,batch=None,require_quote=Fa
         if not fal_media.key():raise ValueError('请先配置 fal API Key')
     if 'quote_digest' in payload and (not quote or payload['quote_digest']!=quote['digest']):
         raise ValueError('生成参数或报价已变化，请重新确认')
+    if 'quote_digest' in payload:
+        age=quote_age(payload['quote_digest'])
+        if age is None:raise ValueError('报价未在本机确认或已过期，请重新查看报价')
+        if age>QUOTE_TTL:raise ValueError('报价已过期，请重新查看报价')
     dedupe=f'{pid}:{snapshot["episode_id"]}:{kind}:{nonce}'
     now=time.time()
     with (nullcontext(connection) if connection is not None else connect()) as c:
@@ -1012,7 +1033,7 @@ def production_batch(body, submit=False):
     requests=body.get('requests')
     if not isinstance(requests,list) or not 1<=len(requests)<=20 or any(not isinstance(r,dict) for r in requests):
         raise ValueError('每批须选择 1–20 个生成片段')
-    allowed={'kind','shot_id','episode_id','segment_id','storyboard','model','storyboard_reference_mode','comparison','instruction','seconds'}
+    allowed={'kind','shot_id','episode_id','segment_id','storyboard','model','storyboard_reference_mode','comparison','instruction','seconds','allow_unapproved'}
     if any(set(r)-allowed or r.get('kind') not in ('image','video') or not r.get('shot_id') for r in requests):
         raise ValueError('批次只支持已准备的镜头画面')
     identifiers=[(r['kind'],r['shot_id'],r.get('segment_id'),r.get('model') if r.get('comparison') else None) for r in requests]
@@ -1620,7 +1641,8 @@ def work_once():
                     elif frozen['mode']=='storyboard':
                         current_packet=storyboard_packet(current,frozen['shot_id'],frozen['model'],
                                                          reference_mode=frozen.get('reference_mode','image'))
-                    else:current_packet=preparation.freeze(current,frozen['shot_id'],row['kind'],frozen['id'],media_path,lambda k:bool(key_for(k)))
+                    else:current_packet=preparation.freeze(current,frozen['shot_id'],row['kind'],frozen['id'],media_path,lambda k:bool(key_for(k)),
+                                                            allow_unapproved=bool((frozen.get('approval') or {}).get('allow_unapproved')))
                     if current_packet!=frozen:raise ValueError('制作准备或模型能力已变化，请重新确认片段')
                 if not asset_image and not production.fresh(current,payload['snapshot']):raise ValueError('来源镜头或承接状态已变化，未提交生成，请重新准备')
                 if direct_media:
@@ -1822,7 +1844,8 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(body, dict):raise ValueError('请求内容必须是 JSON 对象')
             if path=='/api/upload/discard':return self.respond(discard_upload(body.get('file')))
             if path=='/api/preparation/initialize':return self.respond(initialize_preparation(body['project_id'],body['revision'],body.get('episode_id')))
-            if path=='/api/preparation/open':return self.respond(open_preparation(body['project_id'],body['shot_id'],body.get('kind','video')))
+            if path=='/api/preparation/open':return self.respond(open_preparation(body['project_id'],body['shot_id'],body.get('kind','video'),
+                                                                                  body.get('allow_unapproved') is True))
             if path=='/api/preparation/save':return self.respond(save_preparation(body['project_id'],body['shot_id'],body['revision'],body['plan'],body['basis']))
             if path=='/api/continuity/preview':return self.respond(continuity_preview(body['project_id'],body['episode_id']))
             if path=='/api/continuity/confirm':return self.respond(confirm_continuity(body['project_id'],body['episode_id'],body['revision'],body['digest'],body['resolution'],body.get('reason','')))

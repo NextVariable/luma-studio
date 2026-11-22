@@ -542,9 +542,10 @@ function compareVideo(scope,shot){
 }
 
 async function bindAdvancedMake(box,view,p,s){
-  const open=()=>L.api('/api/preparation/open',{project_id:p.id,shot_id:s.id});
+  const open=(allow=false)=>L.api('/api/preparation/open',{project_id:p.id,shot_id:s.id,allow_unapproved:allow});
   try{
-    let data=await open();
+    let allowUnapproved=false;
+    let data=await open(allowUnapproved);
     if(!box.isConnected||L.ui.productionMode!=='advanced')return;
     const plan=structuredClone(data.plan),chosen={...(s.segment_sources||{})};
     const nonces=new Map();
@@ -567,7 +568,7 @@ async function bindAdvancedMake(box,view,p,s){
         ${Object.entries(profile.role_limits).filter(([,limit])=>limit>0).map(([role,limit])=>{
           const ids=new Set(seg.references.filter(r=>r.role===role).map(r=>r.reference_id));
           return `<label class="field"><span>${esc(referenceRoles[role]||role)}</span><select class="select" aria-label="${esc(referenceRoles[role]||role)}" data-role="${esc(role)}" ${limit>1?'multiple':''} ${dis}>
-            ${limit===1?opt('','请选择图片'):''}${data.references.map(r=>opt(r.reference_id,r.label,ids.has(r.reference_id))).join('')}
+            ${limit===1?opt('','请选择图片'):''}${data.references.map(r=>opt(r.reference_id,r.label+(r.source==='asset'&&!r.approved?'（未批准）':''),ids.has(r.reference_id))).join('')}
           </select></label>`;
         }).join('')}`:''}`;
     };
@@ -589,9 +590,10 @@ async function bindAdvancedMake(box,view,p,s){
     };
     const submit=async seg=>{
       if(!canGenerate(seg))throw Error('请先保存制作准备，并检查是否已有生成任务');
+      if(data.allow_unapproved&&!await L.confirmBox('使用未批准参考图？','这些视图只进入本次请求，不会写入批准记录。生成后仍建议回到素材中完成批准。','确认并生成'))return;
       const title=seg.kind==='image'?'生成图片':'生成视频';
       const request={project_id:p.id,episode_id:s.episode_id,shot_id:s.id,kind:seg.kind,
-        segment_id:seg.id,preparation_digest:data.status.plan_digest};
+        segment_id:seg.id,preparation_digest:data.status.plan_digest,allow_unapproved:data.allow_unapproved===true};
       const quote_digest=await L.confirmGeneration(title,request);
       if(!quote_digest)return;
       if(!canGenerate(seg))throw Error('制作准备已变化，请重新保存后生成');
@@ -606,6 +608,7 @@ async function bindAdvancedMake(box,view,p,s){
     };
     function renderPanel(){
       const issues=[...new Set((data.status?.issues||[]).map(i=>i.message))];
+      const unapproved=(data.references||[]).filter(r=>r.source==='asset'&&!r.approved);
       box.innerHTML=`
         <details><summary>连接图片与视频服务</summary>
           <label class="field"><span>服务</span><select class="select" data-provider>
@@ -617,6 +620,9 @@ async function bindAdvancedMake(box,view,p,s){
           <button class="btn small" data-connect-fal>保存 Key 到本机</button>
         </details>
         ${issues.length?`<div class="notice ${s.preparation?'wait':''}"><div class="grow">${issues.map(message=>`<p class="muted">${esc(message)}</p>`).join('')}</div></div>`:'<p class="muted">制作准备已就绪。</p>'}
+        ${unapproved.length?`<div class="notice wait"><div class="grow"><p class="muted">本镜绑定的资产还有 ${unapproved.length} 张未批准视图，默认不会进入正式生成。</p>
+          <label class="row"><input type="checkbox" data-allow-unapproved ${data.allow_unapproved?'checked':''}> 本次生成明确使用未批准参考图（不写入批准记录）</label>
+          <button class="btn small" data-guide-approve-refs>去批准参考图</button></div></div>`:''}
         <p class="faint" data-prep-draft hidden>保存修改后才能生成。</p>
         ${plan.segments.map((g,i)=>`<div class="line-card" data-seg="${esc(g.id)}">
           <div class="row prep-segment-head"><b class="num">片段 ${i+1}</b><span class="faint num">${L.clock(g.start)} – ${L.clock(g.end)}</span><span class="spacer"></span>
@@ -666,6 +672,18 @@ async function bindAdvancedMake(box,view,p,s){
         };
         $('[data-generate]',card).onclick=e=>L.busy(e.currentTarget,()=>submit(seg));
       });
+      const allowBox=$('[data-allow-unapproved]',box);
+      if(allowBox)allowBox.onchange=async e=>{
+        if(changed){e.target.checked=!e.target.checked;L.toast('请先保存制作准备，再切换未批准参考图选项');return}
+        allowUnapproved=e.target.checked;
+        data=await open(allowUnapproved);
+        if(box.isConnected)renderPanel();
+      };
+      const approveButton=$('[data-guide-approve-refs]',box);
+      if(approveButton)approveButton.onclick=()=>{
+        const target=s.asset_ids.map(id=>p.assets.find(a=>a.id===id)).find(a=>a&&a.kind==='character')||p.assets.find(a=>s.asset_ids.includes(a.id));
+        if(target)L.assetDialog(target.id);else L.go('cast');
+      };
       $('[data-connect-fal]',box).onclick=e=>L.busy(e.currentTarget,async()=>{
         const field=$('[data-fal-key]',box);
         await L.api('/api/settings/media-key',{provider:$('[data-provider]',box).value,api_key:field.value.trim()});field.value='';
