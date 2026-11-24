@@ -132,6 +132,13 @@ class AgenticStudioTests(TestCase):
             studio.work_once()
         self.assertEqual(self.row(jid)['state'],'interrupted',self.row(jid)['error'])
         self.assertEqual(json.loads(self.row(jid)['result'])['run_id'],'toy-1')
+        # Recreate the durable checkpoint state an unclean shutdown leaves.
+        with studio.connect() as db:
+            db.execute("UPDATE jobs SET state='running' WHERE id=?",(jid,))
+        studio.init()
+        self.assertEqual(self.row(jid)['state'],'interrupted')
+        self.assertEqual(json.loads(self.row(jid)['result'])['run_id'],'toy-1')
+
         studio.ffmpeg(['-f','lavfi','-i','color=purple:size=640x360','-t','6','-pix_fmt','yuv420p',str(studio.MEDIA/'clip.mp4')])
         studio.reconcile_job(p['id'],jid)
         with patch.object(media,'request',side_effect=[dict(ok,task_id='toy-1',status='Success',file_id='toy-file'),
@@ -191,3 +198,73 @@ class AgenticStudioTests(TestCase):
         self.assertEqual([r['role'] for r in packet['references']],['character','character','composition'])
         self.assertIn('前景肩背',packet['instruction'])
         self.assertEqual(p['shots'][1]['selected_takes'],shot['selected_takes'])
+
+    def test_reviewed_first_frame_comparison_receipts_and_billing(self):
+        p=sample_scene.create(studio.MEDIA,studio.save)
+        shot=p['shots'][1]
+        scope=dict(project_id=p['id'],shot_id=shot['id'],episode_id=shot['episode_id'])
+        request=dict(scope,instruction='阿远朝画面右侧轻轻抬眼，机位固定。',seconds=6)
+        with self.assertRaisesRegex(ValueError,'人工复核'):
+            studio.video_comparison(request)
+        take=shot['selected_takes']['image']
+        ctx=dict(scope,take_id=take)
+        review=studio.candidate_review(ctx)
+        studio.candidate_review(dict(ctx,basis=review['basis'],
+            structure={key:'pass' for key in review['structure']},
+            scores={key:3 for key in review['scores']},notes='离线演练结构与评分'),True)
+        with patch.dict('os.environ',DASHSCOPE_API_KEY='fixture-wan'):
+            preview=studio.video_comparison(request)
+            self.assertEqual(preview['estimated_cny'],'2.25')
+            wan,hailuo=preview['quotes']
+            self.assertEqual((wan['estimated_cny'],hailuo['estimated_cny']),('0.90','1.35'))
+            self.assertEqual(wan['comparison_id'],hailuo['comparison_id'])
+            self.assertEqual(wan['references'],hailuo['references'])
+            item=preview['requests'][0]
+            with self.assertRaisesRegex(ValueError,'付费调用已暂停'):
+                studio.enqueue(p['id'],'video',dict(item,quote_digest=wan['digest']),'no-budget')
+            studio.set_spending(1)
+            job=studio.enqueue(p['id'],'video',dict(item,quote_digest=wan['digest']),'one')
+            studio.ffmpeg(['-f','lavfi','-i','color=blue:size=640x360','-t','6','-pix_fmt','yuv420p',str(studio.MEDIA/'comparison.mp4')])
+            with patch.object(media,'request',side_effect=[
+                {'request_id':'submit-request','output':{'task_id':'same-task'}},
+                {'output':{'task_status':'SUCCEEDED','video_url':'https://fixture.invalid/clip'}}
+            ]) as remote, patch('luma.media_bridge.receive',return_value='comparison.mp4'):
+                studio.work_once()
+                self.assertEqual(remote.call_count,2)
+                self.assertEqual(remote.call_args_list[0].args[2]['input']['prompt'],request['instruction'])
+            row=self.row(job)
+            self.assertEqual(row['state'],'succeeded',row['error'])
+            result=json.loads(row['result'])
+            self.assertEqual(result['provider_request_id'],'submit-request')
+            self.assertEqual(result['run_id'],'same-task')
+            self.assertEqual(len(result['output_sha256']),64)
+            self.assertGreaterEqual(result['completed_at'],result['submission_started_at'])
+            self.assertEqual(studio.spending(),{'remaining':0,'used':1})
+            bill=dict(project_id=p['id'],job_id=job,actual_cny='0.90',evidence='模拟账单条目')
+            self.assertEqual(studio.record_job_bill(bill),studio.record_job_bill(bill))
+            result=json.loads(self.row(job)['result'])
+            self.assertEqual(result['billing_status'],'manual_statement')
+            self.assertEqual(len(result['billing_history']),1)
+            comparison_take=studio.project(p['id'])['shots'][1]['takes'][-1]
+            self.assertEqual(comparison_take['comparison_id'],wan['comparison_id'])
+            self.assertFalse(shot['selected_takes'].get('video'))
+
+    def test_imported_style_approval_and_invalid_provider_reply(self):
+        p=sample_scene.create(studio.MEDIA,studio.save)
+        style=dict(kind='style',id='art',name='线条',description='清晰墨线')
+        p['assets'].append(style)
+        production.normalize(p)
+        style['versions'][0]['file']=self.image
+        p=studio.save(p,p['revision'])
+        request=dict(project_id=p['id'],revision=p['revision'],asset_id='art',version_id=style['selected_version'],
+                     file=self.image,source='离线原创视觉参考')
+        p=studio.approve_imported_reference(request)
+        request['revision']=p['revision']
+        with self.assertRaisesRegex(ValueError,'确认替换'):
+            studio.approve_imported_reference(request)
+        view=studio.director_references(dict(project_id=p['id'],shot_id=p['shots'][1]['id']))
+        self.assertEqual(view['text']['references'][-1]['status'],'approved')
+        self.assertEqual(view['text']['references'][-1]['role'],'style')
+        with patch.object(media,'request',return_value={'task_id':'pending-without-status'}):
+            with self.assertRaises(media.UncertainRun):
+                media.minimax_request('/v1/video_generation',{})

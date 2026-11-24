@@ -1,5 +1,6 @@
 """Offline acceptance of the fal queue and three-shot delivery using local fixtures."""
 import copy
+import hashlib
 import json
 import os
 import unittest
@@ -10,6 +11,10 @@ from luma import studio
 from luma.providers import UncertainRun
 from test_openai_direct import RealtimeSocket, reply
 import test_studio
+
+PNG_1PX=(b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00'
+         b'\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4'
+         b'\x00\x00\x00\x00IEND\xaeB`\x82')
 
 
 class FalMediaTests(unittest.TestCase):
@@ -23,6 +28,18 @@ class FalMediaTests(unittest.TestCase):
         self.p = studio.save(self.p, self.p['revision'])
         self.edit('character_look', asset_id='hero', outfit='蓝外套', voice_id='alloy')
         self.edit('asset_version', asset_id='hero', file='anchor.png')
+        hero = next(a for a in self.p['assets'] if a['id'] == 'hero')
+        version = next(v for v in hero['versions'] if v['id'] == hero['selected_version'])
+        media = studio.media_path(version['file'])
+        if not media.read_bytes().startswith((b'\x89PNG\r\n\x1a\n', b'\xff\xd8\xff', b'RIFF')):
+            media.write_bytes(PNG_1PX)
+        with media.open('rb') as stream:
+            sha = hashlib.file_digest(stream, 'sha256').hexdigest()
+        bible = self.p['creative_brief'].setdefault('visual_bible', {})
+        bible.setdefault('references', []).append(dict(
+            role='character', asset_id='hero', version_id=version['id'], file=version['file'],
+            view='primary', source='测试批准', sha256=sha))
+        self.p = studio.save(self.p, self.p['revision'])
         self.p['shots'] = [
             {'id': f's{i}', 'description': action, 'duration': 5, 'asset_ids': ['hero'],
              'lines': [{'id': f'l{i}', 'speaker_asset_id': 'hero', 'text': line}]}

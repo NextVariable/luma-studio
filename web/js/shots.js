@@ -414,9 +414,12 @@ async function compareCandidates(project,shot){
     const item=candidates[+select.value], review=item.reviews.at(-1);
     const node=$(`[data-comparison="${select.dataset.candidate}"]`,dialog);
     const cost=item.actual_cny!=null?'实扣 ¥'+item.actual_cny:item.estimated_cny!=null?'报价 ¥'+item.estimated_cny:item.estimated_usd!=null?'报价 $'+item.estimated_usd:'';
-    node.innerHTML=`${mediaTag(item.file,{controls:true})}<p class="muted">${esc([cost,item.queue_to_result_seconds!=null?'入队至完成 '+item.queue_to_result_seconds+' 秒':'',item.selected?'已选用':''].filter(Boolean).join(' · '))}</p>
+    const source={local:'本机文件',provider:'供应商有请求记录',provider_recorded:'供应商有请求记录',provider_unrecorded:'无供应商记录'}[item.evidence_class]||item.evidence_class;
+    const scores=review?.scores?Object.values(review.scores).filter(n=>Number.isFinite(n)):[];
+    node.innerHTML=`${mediaTag(item.file,{controls:true})}<p class="muted">${esc([item.model,item.provider,source,item.request_id?'请求号 '+String(item.request_id).slice(0,18):'',cost,item.execution_seconds!=null?'提交至入库 '+item.execution_seconds+' 秒':item.queue_to_result_seconds!=null?'入队至完成 '+item.queue_to_result_seconds+' 秒':'',item.selected?'已选用':'',scores.length?'人工评分 '+(scores.reduce((a,b)=>a+b,0)/scores.length).toFixed(1)+'/5':''].filter(Boolean).join(' · '))}</p>
+      <p class="faint" style="margin:0">离线或模拟记录不能作为真实 API 验收；真实费用与成片质量须以供应商账单和实际输出为准。</p>
       ${review?`<p>${review.matches_shot?'':'旧镜头设定 · '}${esc(review.notes)}</p>`:''}<button class="btn small" data-review-media>人工复核</button>
-      ${review&&review.matches_shot&&Object.values(review.structure).includes('fail')?'<button class="btn small" data-revise-reviewed>提出单镜修改</button>':''}`;
+      ${review&&review.matches_shot&&Object.values(review.structure).includes('fail')?'<button class="btn small" data-revise-reviewed>提出单镜修改（只影响这一镜）</button>':''}`;
     $('[data-revise-reviewed]',node)?.addEventListener('click',()=>{dialog.close();reviseDialog(shot,review.notes)});
     $('[data-review-media]',node).onclick=e=>L.busy(e.currentTarget,async()=>{
       const detail=await L.api('/api/quality/open',{...scope,take_id:item.id});
@@ -441,7 +444,10 @@ async function compareCandidates(project,shot){
 
 /* 制作：制作准备、片段选用与本机拼接 */
 function make(p,s){
-  return `<div id="prep" class="side-stack"><p class="faint">正在读取制作准备…</p></div>`;
+  return `<div class="row" role="group" aria-label="制作模式">
+    <button class="btn small" data-production-mode="basic" aria-pressed="true">基础</button>
+    <button class="btn small" data-production-mode="advanced" aria-pressed="false">高级</button></div>
+    <div id="prep" class="side-stack"></div>`;
 }
 const generationModes={
   text_to_image:'文字生图',reference_to_image:'参考图生图',
@@ -451,10 +457,96 @@ const referenceRoles={reference_image:'参考图',first_frame:'视频首帧',las
 
 async function bindMake(view,p,s){
   const box=$('#prep',view);
-  const open=()=>L.api('/api/preparation/open',{project_id:p.id,shot_id:s.id});
+  const modes=$$('[data-production-mode]',view);
+  const setMode=async (mode,changing=false)=>{
+    if(changing&&!await L.leaveOk())return;
+    L.ui.productionMode=mode;
+    modes.forEach(button=>button.setAttribute('aria-pressed',button.dataset.productionMode===mode));
+    if(mode==='basic')await basicProduction(box,p,s);
+    else await bindAdvancedMake(box,view,p,s);
+  };
+  modes.forEach(button=>button.onclick=e=>L.busy(e.currentTarget,()=>setMode(button.dataset.productionMode,true)));
+  await setMode(L.ui.productionMode||'basic');
+}
+
+async function basicProduction(box,p,s){
+  const scope={project_id:p.id,shot_id:s.id,episode_id:s.episode_id};
+  const director=await L.api('/api/director/references',scope);
+  if(!box.isConnected||L.ui.productionMode!=='basic')return;
+  const decision=director.text;
+  const approvals=decision.references?.filter(r=>r.status==='legacy')||[];
+  const approved=decision.references?.filter(r=>r.status==='approved')||[];
+  const hasStyle=decision.references?.some(r=>r.role==='style');
+  box.innerHTML=`<div class="side-stack">
+    <div><b>1. 检查人物和场景 ${decision.blocked?'（待处理）':approved.length?'（就绪）':''}</b>
+      ${decision.blocked?`<p class="muted">${esc(decision.blocked)}</p><button class="btn small" data-guide-approve>去批准参考图</button>`:
+        decision.references.map(r=>`<p class="muted">${esc(r.label)} · ${esc(r.reason)}${r.status==='legacy'?' · 旧版批准（无文件校验）':''}</p>`).join('')}
+      <p class="faint" style="margin:4px 0 0">参考就绪：${approved.length} 张已批准${approvals.length?` · ${approvals.length} 张旧版批准`:''}${hasStyle?' · 已设画风参考':' · 未设作品画风'}</p>
+      <button class="btn small" data-guide-assets>检查角色、场景与画风</button></div>
+    <div><b>2. 定机位并生成分镜</b><div class="row">
+      <button class="btn small" data-guide-camera>调整机位</button>
+      <button class="btn small" data-guide-image ${director.image?.blocked?'disabled':''}>构图图分镜</button>
+      <button class="btn small" data-guide-image-text ${decision.blocked?'disabled':''}>文字机位分镜</button></div>
+      ${director.image?.blocked?`<p class="faint" style="margin:4px 0 0">构图图分镜：${esc(director.image.blocked)}</p>`:''}</div>
+    <div><b>3. 看候选并记录复核</b><div class="row">
+      <button class="btn small" data-guide-review ${s.takes.some(t=>t.kind!=='audio')?'':'disabled'}>比较候选</button>
+      <button class="btn small" data-guide-video ${s.image?'':'disabled'}>Wan／海螺对照</button>
+      <button class="btn small" data-guide-revise ${s.takes.some(t=>t.kind!=='audio')?'':'disabled'}>单镜返工</button></div>
+      <p class="faint" style="margin:4px 0 0">${s.takes.some(t=>t.kind!=='audio')?`${s.takes.filter(t=>t.kind!=='audio').length} 个候选${s.image?' · 已采用首帧':''}${s.video?' · 已采用视频':''}`:'还没有画面候选'} · 生成和返工只作用于这一镜</p></div>
+    <div><b>4. 配音、字幕和导出</b><div class="row">
+      <button class="btn small" data-guide-dialogue>编辑对白</button>
+      <button class="btn small" data-guide-delivery>检查交付</button></div></div></div>`;
+  const prepare=(selector,action)=>{const button=$(selector,box);if(button)button.onclick=e=>L.busy(e.currentTarget,action)};
+  prepare('[data-guide-assets]',()=>L.go('cast'));
+  prepare('[data-guide-approve]',()=>{
+    const candidates=s.asset_ids.map(id=>p.assets.find(a=>a.id===id)).filter(Boolean);
+    const target=candidates.find(a=>a.kind==='character')||candidates[0];
+    if(target)L.assetDialog(target.id);else L.go('cast');
+  });
+  prepare('[data-guide-camera]',()=>L.shotCamera(s));
+  prepare('[data-guide-image]',()=>L.storyboardQuote(s.id,undefined,'image'));
+  prepare('[data-guide-image-text]',()=>L.storyboardQuote(s.id,undefined,'text'));
+  prepare('[data-guide-review]',()=>compareCandidates(p,s));
+  prepare('[data-guide-video]',()=>compareVideo(scope,s));
+  prepare('[data-guide-revise]',()=>reviseDialog(s));
+  prepare('[data-guide-dialogue]',()=>{L.ui.tab='dialogue';L.render()});
+  prepare('[data-guide-delivery]',()=>L.go('delivery'));
+}
+
+function compareVideo(scope,shot){
+  const modal=L.modal({title:'同首帧对照',body:`
+    <p>两个模型使用同一张已选分镜、动作和时长。首帧须通过人工复核。</p>
+    <label class="field"><span>共同动作</span><textarea data-motion rows="3" maxlength="2000">${esc(shot.description.slice(0,2000))}</textarea></label>
+    <label class="field"><span>生成时长</span><select data-seconds><option value="6">6 秒</option><option value="10">10 秒</option></select></label>
+    <p class="muted">Wan 使用 720P，海螺使用 768P。对照时长与正片镜头不同时，先在制作准备里处理裁切或生成正式片段。</p>`,
+    foot:'<button class="btn" data-close>取消</button><button class="btn primary" data-review-quote>查看两家报价</button>'});
+  $('[data-review-quote]',modal).onclick=e=>L.busy(e.currentTarget,async()=>{
+    const q=await L.api('/api/jobs/video-comparison',{...scope,seconds:Number($('[data-seconds]',modal).value),instruction:$('[data-motion]',modal).value});
+    modal.close();
+    const compare=L.modal({title:'两家视频报价',body:`
+      <img src="${L.media(q.quotes[0].references[0].file)}" alt="共同首帧">
+      <p>${esc(q.requests[0].instruction)}</p>
+      ${q.quotes.map((item,i)=>`<div class="row"><span>${esc(item.model_label)} · ${esc(item.resolution)} · ${esc(L.quoteCost(item))}</span>
+        <button class="btn small" data-provider-quote="${i}" ${!item.configured||L.S.data.spending.remaining<1?'disabled':''}>确认此项费用</button></div>`).join('')}`,
+      foot:'<button class="btn" data-close>关闭</button>'});
+    const nonces=q.requests.map(()=>crypto.randomUUID());
+    $$('[data-provider-quote]',compare).forEach(button=>button.onclick=e=>L.busy(e.currentTarget,async()=>{
+      const index=Number(button.dataset.providerQuote), item=q.quotes[index];
+      if(!await L.confirmBox('提交 '+item.model_label+'？',L.quoteCost(item)+'，结果将加入候选。','确认并生成'))return;
+      await L.api('/api/jobs',{...scope,...q.requests[index],quote_digest:item.digest,nonce:nonces[index]});
+      await L.refresh();button.disabled=true;
+      if(!L.S.data.spending.remaining)$$('[data-provider-quote]',compare).forEach(other=>other.disabled=true);
+      L.toast('已加入生成队列');
+    }));
+  });
+}
+
+async function bindAdvancedMake(box,view,p,s){
+  const open=(allow=false)=>L.api('/api/preparation/open',{project_id:p.id,shot_id:s.id,allow_unapproved:allow});
   try{
-    let data=await open();
-    if(!box.isConnected)return;
+    let allowUnapproved=false;
+    let data=await open(allowUnapproved);
+    if(!box.isConnected||L.ui.productionMode!=='advanced')return;
     const plan=structuredClone(data.plan),chosen={...(s.segment_sources||{})};
     const nonces=new Map();
     let changed=false;
@@ -476,7 +568,7 @@ async function bindMake(view,p,s){
         ${Object.entries(profile.role_limits).filter(([,limit])=>limit>0).map(([role,limit])=>{
           const ids=new Set(seg.references.filter(r=>r.role===role).map(r=>r.reference_id));
           return `<label class="field"><span>${esc(referenceRoles[role]||role)}</span><select class="select" aria-label="${esc(referenceRoles[role]||role)}" data-role="${esc(role)}" ${limit>1?'multiple':''} ${dis}>
-            ${limit===1?opt('','请选择图片'):''}${data.references.map(r=>opt(r.reference_id,r.label,ids.has(r.reference_id))).join('')}
+            ${limit===1?opt('','请选择图片'):''}${data.references.map(r=>opt(r.reference_id,r.label+(r.source==='asset'&&!r.approved?'（未批准）':''),ids.has(r.reference_id))).join('')}
           </select></label>`;
         }).join('')}`:''}`;
     };
@@ -498,9 +590,10 @@ async function bindMake(view,p,s){
     };
     const submit=async seg=>{
       if(!canGenerate(seg))throw Error('请先保存制作准备，并检查是否已有生成任务');
+      if(data.allow_unapproved&&!await L.confirmBox('使用未批准参考图？','这些视图只进入本次请求，不会写入批准记录。生成后仍建议回到素材中完成批准。','确认并生成'))return;
       const title=seg.kind==='image'?'生成图片':'生成视频';
       const request={project_id:p.id,episode_id:s.episode_id,shot_id:s.id,kind:seg.kind,
-        segment_id:seg.id,preparation_digest:data.status.plan_digest};
+        segment_id:seg.id,preparation_digest:data.status.plan_digest,allow_unapproved:data.allow_unapproved===true};
       const quote_digest=await L.confirmGeneration(title,request);
       if(!quote_digest)return;
       if(!canGenerate(seg))throw Error('制作准备已变化，请重新保存后生成');
@@ -515,6 +608,7 @@ async function bindMake(view,p,s){
     };
     function renderPanel(){
       const issues=[...new Set((data.status?.issues||[]).map(i=>i.message))];
+      const unapproved=(data.references||[]).filter(r=>r.source==='asset'&&!r.approved);
       box.innerHTML=`
         <details><summary>连接图片与视频服务</summary>
           <label class="field"><span>服务</span><select class="select" data-provider>
@@ -526,6 +620,9 @@ async function bindMake(view,p,s){
           <button class="btn small" data-connect-fal>保存 Key 到本机</button>
         </details>
         ${issues.length?`<div class="notice ${s.preparation?'wait':''}"><div class="grow">${issues.map(message=>`<p class="muted">${esc(message)}</p>`).join('')}</div></div>`:'<p class="muted">制作准备已就绪。</p>'}
+        ${unapproved.length?`<div class="notice wait"><div class="grow"><p class="muted">本镜绑定的资产还有 ${unapproved.length} 张未批准视图，默认不会进入正式生成。</p>
+          <label class="row"><input type="checkbox" data-allow-unapproved ${data.allow_unapproved?'checked':''}> 本次生成明确使用未批准参考图（不写入批准记录）</label>
+          <button class="btn small" data-guide-approve-refs>去批准参考图</button></div></div>`:''}
         <p class="faint" data-prep-draft hidden>保存修改后才能生成。</p>
         ${plan.segments.map((g,i)=>`<div class="line-card" data-seg="${esc(g.id)}">
           <div class="row prep-segment-head"><b class="num">片段 ${i+1}</b><span class="faint num">${L.clock(g.start)} – ${L.clock(g.end)}</span><span class="spacer"></span>
@@ -575,6 +672,18 @@ async function bindMake(view,p,s){
         };
         $('[data-generate]',card).onclick=e=>L.busy(e.currentTarget,()=>submit(seg));
       });
+      const allowBox=$('[data-allow-unapproved]',box);
+      if(allowBox)allowBox.onchange=async e=>{
+        if(changed){e.target.checked=!e.target.checked;L.toast('请先保存制作准备，再切换未批准参考图选项');return}
+        allowUnapproved=e.target.checked;
+        data=await open(allowUnapproved);
+        if(box.isConnected)renderPanel();
+      };
+      const approveButton=$('[data-guide-approve-refs]',box);
+      if(approveButton)approveButton.onclick=()=>{
+        const target=s.asset_ids.map(id=>p.assets.find(a=>a.id===id)).find(a=>a&&a.kind==='character')||p.assets.find(a=>s.asset_ids.includes(a.id));
+        if(target)L.assetDialog(target.id);else L.go('cast');
+      };
       $('[data-connect-fal]',box).onclick=e=>L.busy(e.currentTarget,async()=>{
         const field=$('[data-fal-key]',box);
         await L.api('/api/settings/media-key',{provider:$('[data-provider]',box).value,api_key:field.value.trim()});field.value='';

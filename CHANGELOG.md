@@ -14,6 +14,9 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). I
 - `POST /api/upload/discard` removes an uploaded file that no project, version or job references.
 - `pyproject.toml` with package metadata, an optional `realtime` extra and lint settings. CI now runs `ruff` for errors.
 - Community files: code of conduct, feature request template, `.editorconfig` and Dependabot updates for GitHub Actions and pip.
+- Asset reference candidates now show model, estimate, billing state, request id, timestamp and failures; approving a candidate can optionally make it the selected version. The asset dialog marks approved versions and how many shots bind each version.
+- The basic production flow offers both composition-image and text-camera storyboards, with each mode's own blocked reason.
+- `POST /api/production/evidence` and the delivery-page "制作证据" report list each candidate as local import, provider record or missing record, with request id, human scores, adoption and billing, and can be downloaded as JSON.
 
 ### Changed
 - Dependabot updates for the CI actions and `websocket-client` 1.9.2 are merged. A test now fails when the `realtime` extra in `pyproject.toml` and `requirements-realtime.txt` disagree.

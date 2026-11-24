@@ -124,6 +124,7 @@ class ProviderIdentityTests(unittest.TestCase):
         with studio.connect() as c:
             job = studio.public_job(c.execute('select * from jobs where id=?', (jid,)).fetchone())
         self.assertEqual(job['provider']['host'], 'api.dify.ai')
+        self.assertNotIn('key_fingerprint', job['provider'])
         self.assertNotIn('SECRET', json.dumps(job))
 
 

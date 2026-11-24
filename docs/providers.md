@@ -36,3 +36,21 @@ of the sample may need their bound outfits and portrait filled in first.
 
 Run `python3 -m unittest discover -s tests -p test_domestic_media.py` to
 exercise this path offline with local media standing in for provider outputs.
+
+## Verified model contracts · 2026-11-22
+
+Prices, model IDs and the limits the studio enforces were checked against the
+official pages below. Provider discounts, free quotas and account-specific
+limits can differ; a quote is an estimate, not a bill.
+
+| Model | Model ID | List price | Limits enforced by the studio | Official page |
+| --- | --- | --- | --- | --- |
+| Seedream 5.0 Flash | `doubao-seedream-5-0-flash-260915` | ¥0.12 per image | One output image per request; 2K output; multi-image input supported | [Ark model detail](https://ark.volcengine.com/region:cn-beijing/model/detail?Id=doubao-seedream-5-0-flash) |
+| Wan 2.6 image-to-video Flash | `wan2.6-i2v-flash` | 720P silent ¥0.15/s (6s ¥0.90) | 2–15 whole seconds, 720P, silent only, one first frame; RPM 300 | [Bailian model page](https://help.aliyun.com/zh/model-studio/wan2-6-i2v-flash) |
+| MiniMax Hailuo 2.3 Fast | `MiniMax-Hailuo-2.3-Fast` | 768P 6s ¥1.35, 768P 10s ¥2.25, 1080P 6s ¥2.31 | 6s or 10s at 768P, one first frame, prompt ≤ 2000 characters | [MiniMax pay-as-you-go](https://platform.minimaxi.com/docs/guides/pricing-paygo) |
+
+The app intentionally offers only Wan 720P silent output: dialogue is reused from
+the separately reviewed audio track, and 1080P silent (¥0.25/s) is not exposed
+yet. Seedream 4.5 remains selectable for comparison but its price is not used in
+new quotes.
+

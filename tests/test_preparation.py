@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import io
 import json
 import os
@@ -8,7 +9,7 @@ from luma import studio
 from luma import production
 from luma import preparation
 import test_studio
-from preparation_fixture import prepare
+from preparation_fixture import prepare, PNG_1PX
 from luma.providers import Dify
 
 
@@ -164,9 +165,15 @@ class PreparationTests(unittest.TestCase):
         with self.assertRaises(ValueError):self.save_plan(plan)
 
     def test_only_explicit_view_is_uploaded_and_other_views_are_omitted(self):
-        self.configured();(studio.MEDIA/'side.png').write_bytes(b'side')
+        self.configured();(studio.MEDIA/'side.png').write_bytes(PNG_1PX)
         self.p=studio.edit_production({'project_id':self.p['id'],'revision':self.p['revision'],'action':'character_look','asset_id':'hero','outfit':'测试服装','voice_id':'alloy','views':{'side':'side.png'}})
         self.p=studio.edit_production({'project_id':self.p['id'],'revision':self.p['revision'],'action':'bind_current','shot_id':'s1'})
+        hero=next(a for a in self.p['assets'] if a['id']=='hero');version=next(v for v in hero['versions'] if v['id']==hero['selected_version'])
+        refs=self.p['creative_brief'].setdefault('visual_bible',{}).setdefault('references',[])
+        refs[:]=[r for r in refs if not (r.get('asset_id')=='hero' and r.get('version_id')==version['id'] and (r.get('view') or 'primary')=='side')]
+        refs.append(dict(role='character',asset_id='hero',version_id=version['id'],file='side.png',view='side',
+                         source='测试批准',sha256=hashlib.sha256(PNG_1PX).hexdigest()))
+        self.p=studio.save(self.p,self.p['revision'])
         opened=studio.open_preparation(self.p['id'],'s1');plan=opened['plan'];plan['character_versions']=preparation.character_versions(self.p,self.p['shots'][0])
         chosen=next(r for r in opened['references'] if r['file']=='side.png');plan['segments'][0]['references']=[{'reference_id':chosen['reference_id'],'role':'reference_image'}];self.save_plan(plan)
         with patch.dict(os.environ,{'DIFY_VIDEO_KEY':'test-only'}):jid=studio.enqueue(self.p['id'],'video',{'shot_id':'s1'},'selected-view')

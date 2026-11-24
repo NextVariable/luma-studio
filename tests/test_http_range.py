@@ -57,6 +57,18 @@ class RangeTests(unittest.TestCase):
             self.assertEqual(response.status, 400)
             self.assertEqual(json.loads(response.read()), {'error': '请求内容必须是 JSON 对象'})
 
+    def test_upload_validates_container_and_removes_rejected_file(self):
+        fixture = Path(__file__).resolve().parents[1] / 'luma/samples/platform/frame-1.jpg'
+        data = fixture.read_bytes()
+        with tempfile.TemporaryDirectory() as temp, patch.object(studio, 'MEDIA', Path(temp)):
+            for suffix, expected in [('jpg', 200), ('png', 400)]:
+                with closing(http.client.HTTPConnection('127.0.0.1', self.port, timeout=5)) as conn:
+                    conn.request('POST', '/api/upload/' + suffix, body=data, headers={'X-Luma': 'studio'})
+                    response = conn.getresponse()
+                    result = json.loads(response.read())
+                    self.assertEqual(response.status, expected, result)
+            self.assertEqual([p.suffix for p in Path(temp).iterdir()], ['.jpg'])
+
     def test_no_range_returns_the_whole_file(self):
         status, body, content_range, _ = self.get()
         self.assertEqual((status, body, content_range), (200, BODY, None))

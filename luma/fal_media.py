@@ -2,13 +2,13 @@
 import base64
 import hashlib
 import json
-import mimetypes
 import os
 import re
 import time
 import urllib.error
 import urllib.request
 
+from .visual import image_mime, read_image
 from .providers import UncertainRun, open_request
 
 BASE = 'https://queue.fal.run'
@@ -64,7 +64,7 @@ def arguments(kind, context, media_path):
         refs = segment['references']
         if [ref['role'] for ref in refs] not in (['character','composition'], ['character','character','composition']):
             raise ValueError('分镜图需要角色设定图和机位构图')
-        return dict(prompt=segment['instruction'], image_urls=[image_url(media_path(r['file'])) for r in refs],
+        return dict(prompt=segment['instruction'], image_urls=[reference_image_url(r, media_path) for r in refs],
                     aspect_ratio=segment['parameters']['aspect_ratio'], num_images=1,
                     limit_generations=True, output_format='png')
     profile = PROFILES.get(model)
@@ -84,15 +84,20 @@ def arguments(kind, context, media_path):
     if len(refs) != profile['max_images']:
         raise ValueError('fal 参考图数量与已确认的制作方式不一致')
     if refs:
-        body['image_url'] = image_url(media_path(refs[0]['file']))
+        body['image_url'] = reference_image_url(refs[0], media_path)
     return body
 
 
-def image_url(file):
-    mime = mimetypes.guess_type(file.name)[0]
-    if mime not in ('image/png','image/jpeg','image/webp') or file.stat().st_size > 8*1024*1024:
-        raise ValueError('参考图须为不超过 8 MB 的 PNG、JPEG 或 WebP')
-    return f'data:{mime};base64,' + base64.b64encode(file.read_bytes()).decode('ascii')
+def reference_image_url(ref, media_path):
+    digest = ref.get('sha256') or ref.get('reference_id', '')
+    return image_url(media_path(ref['file']), digest if re.fullmatch(r'[0-9a-f]{64}', digest) else None)
+
+
+def image_url(file, expected_sha256=None):
+    data = read_image(file)
+    if expected_sha256 and hashlib.sha256(data).hexdigest() != expected_sha256:
+        raise ValueError('参考文件内容已变化，请重新确认生成请求')
+    return f'data:{image_mime(data)};base64,' + base64.b64encode(data).decode('ascii')
 
 
 class Fal:

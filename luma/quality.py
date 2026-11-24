@@ -4,6 +4,7 @@ import json
 import time
 
 from . import continuity
+from . import evidence
 
 STRUCTURE = {
     'cast': '人数与身份', 'wardrobe': '服装', 'gaze': '视线与站位',
@@ -27,19 +28,27 @@ def candidates(db, project, shot):
         if kind not in ('image', 'video'):
             continue
         job = jobs.get(take.get('job_id'))
-        quote, receipt = {}, {}
+        payload, quote, receipt = {}, {}, {}
         elapsed = None
         if job:
-            quote = json.loads(job['payload']).get('quote', {})
+            payload = json.loads(job['payload']) or {}
+            quote = payload.get('quote', {})
             receipt = json.loads(job['result'] or '{}')
             elapsed = max(0, round(job['updated'] - job['created']))
+        provider = payload.get('provider') if isinstance(payload.get('provider'), dict) else {}
         rows.append(dict(id=take['id'], file=take['file'], label=take['label'], kind=kind,
-                         model=take.get('model') or quote.get('model'), provider=take['source'],
+                         model=take.get('model') or quote.get('model'),
+                         provider=provider.get('provider') or take['source'], source=take['source'],
+                         evidence_class=evidence.classify(take, receipt), verified=False,
                          selected=shot.get('selected_takes', {}).get(kind)==take['id'],
                          estimated_cny=quote.get('estimated_cny'), estimated_usd=quote.get('estimated_usd'),
                          actual_cny=receipt.get('actual_cny'), billing_status=receipt.get('billing_status'),
                          request_id=receipt.get('provider_request_id') or receipt.get('run_id'),
-                         queue_to_result_seconds=elapsed, reviews=[dict(r, matches_shot=r.get('shot_basis')==basis)
+                         comparison_id=take.get('comparison_id'),
+                         queue_to_result_seconds=elapsed,
+                         execution_seconds=round(max(0,receipt['completed_at']-receipt['submission_started_at']),1)
+                         if receipt.get('completed_at') and receipt.get('submission_started_at') else None,
+                         reviews=[dict(r, matches_shot=r.get('shot_basis')==basis)
                          for r in reviews.get(take['id'], [])]))
     return rows
 

@@ -3,9 +3,10 @@
 const {esc,$,$$}=L;
 const KINDS={character:'角色',scene:'场景',prop:'道具',style:'风格',voice:'音色参考'};
 const VIEWS={front:'正面',side:'侧面',three_quarter:'四分之三',back:'背面'};
+const SCENE_VIEWS={primary:'设定图',wide:'全景',detail:'细节',reverse:'反打'};
 const VOICES=['alloy','ash','ballad','coral','echo','fable','onyx','nova','sage','shimmer','verse','marin','cedar'];
 const current=a=>a.versions.find(v=>v.id===a.selected_version)||a.versions[a.versions.length-1];
-const picOf=a=>{const v=current(a);return v.views?.front||v.views?.three_quarter||v.file||null};
+const picOf=a=>{const v=current(a);return v.file||v.views?.front||v.views?.three_quarter||Object.values(v.views||{})[0]||null};
 const usedBy=(p,a)=>p.shots.filter(s=>(s.asset_ids||[]).includes(a.id)).length;
 
 L.views.cast=view=>{
@@ -46,6 +47,18 @@ function addAsset(){
 function assetDialog(aid){
   const p=L.project(),a=p.assets.find(x=>x.id===aid);if(!a)return;
   const v=current(a),isChar=a.kind==='character';
+  const approvals=p.creative_brief?.visual_bible?.references||[];
+  const approvedVersions=new Set(approvals.filter(r=>r.asset_id===aid&&r.role===a.kind).map(r=>r.version_id));
+  const versionApprovals=approvals.filter(r=>r.asset_id===aid&&r.version_id===v.id);
+  const versionUses={};p.shots.forEach(s=>{const vid=(s.asset_bindings||{})[aid];if(vid)versionUses[vid]=(versionUses[vid]||0)+1});
+  const viewsOf=x=>[...(x.file?['primary']:[]),...Object.keys(x.views||{})];
+  const viewLabel=view=>a.kind==='scene'?SCENE_VIEWS[view]||view:view==='primary'?'设定图':VIEWS[view]||view;
+  const visuals=a.kind==='style'?(picOf(a)?[{view:'primary',file:picOf(a)}]:[]):
+    [...(v.file?[{view:'primary',file:v.file}]:[]),...Object.entries(v.views||{}).map(([view,file])=>({view,file}))];
+  const approvalsByView=new Map(versionApprovals.flatMap(r=>{
+    const slot=visuals.find(x=>x.file===r.file&&(!r.view||r.view===x.view));
+    return slot?[[slot.view,r]]:[];
+  }));
   const m=L.modal({title:a.name,wide:true,body:`
     <div class="grid2">
       <label class="field"><span>名称</span><input class="input" id="e-name" maxlength="100" value="${esc(a.name)}"></label>
@@ -56,70 +69,144 @@ function assetDialog(aid){
     ${isChar?`<div class="sub">当前造型</div>
       <div class="grid2"><label class="field"><span>造型</span><input class="input" id="look-outfit" maxlength="500" value="${esc(v.outfit||'')}" placeholder="例如：黑色雨衣，短发"></label>
  <label class="field"><span>配音音色</span><select class="select" id="look-voice">${VOICES.map(x=>`<option ${((v.voice_id||'alloy')===x)?'selected':''}>${x}</option>`).join('')}</select></label></div>
-      <div class="row"><button class="btn small" id="look-save">另存为新造型版本</button><span class="faint">换造型会清空四视图，需要重新上传。</span></div>
+      <div class="row"><button class="btn small" id="look-save">另存为新造型版本</button><span class="faint">换造型会清空视图，需要重新上传。</span></div>
       <div class="views">${Object.entries(VIEWS).map(([k,label])=>{const f=v.views?.[k];return `<button class="view-slot" data-view="${k}" style="${f?`background-image:url('${L.media(f)}')`:''}">${f?'':'＋'}<span>${label}</span></button>`}).join('')}</div>`
+    :a.kind==='scene'?`<div class="row"><button class="btn small" id="ref-up">上传主设定图，生成新版本</button>${v.file?`<a class="faint" href="${L.media(v.file)}" target="_blank" rel="noopener">查看当前主设定图</a>`:''}</div>
+      <div class="views">${Object.entries(SCENE_VIEWS).filter(([k])=>k!=='primary').map(([k,label])=>{const f=v.views?.[k];return `<button class="view-slot" data-scene-view="${k}" style="${f?`background-image:url('${L.media(f)}')`:''}">${f?'':'＋'}<span>${label}</span></button>`}).join('')}</div>`
     :`<div class="row"><button class="btn small" id="ref-up">上传参考图，生成新版本</button>${v.file?`<a class="faint" href="${L.media(v.file)}" target="_blank" rel="noopener">查看当前参考图</a>`:''}</div>`}
     ${['character','scene'].includes(a.kind)?'<button class="btn small" id="asset-images">生成参考与比较候选</button>':''}
+    ${visuals.length?`<div class="sub">当前版本参考（${approvalsByView.size} / ${visuals.length} 已批准）</div>
+      ${visuals.some(slot=>!approvalsByView.has(slot.view))?'<p class="notice wait" style="margin:0 0 8px">这些视图尚未批准，正式生成不会使用；请逐个批准，或在报价中明确确认本次使用。</p>':''}
+      <div class="views">${visuals.map(slot=>{const approval=approvalsByView.get(slot.view);return `<figure class="view-slot" style="margin:0">
+        <img src="${L.media(slot.file)}" alt="${esc(a.name)} ${esc(viewLabel(slot.view))}" style="max-width:100%;max-height:20vh;object-fit:contain">
+        <figcaption><span class="chip">${approval?(approval.sha256?'已批准':'旧版批准'):'未批准'}</span><span>${esc(viewLabel(slot.view))}</span><button class="btn small" data-approve-view="${esc(slot.view)}">${approval?'重新批准':'批准此视图'}</button></figcaption></figure>`}).join('')}</div>`
+      :'<p class="faint">这个版本还没有参考图。批准后才会进入分镜生成。</p>'}
     <div class="sub">版本（${a.versions.length}）</div>
-    <div class="versions">${[...a.versions].reverse().map(x=>`<button data-vid="${esc(x.id)}" ${x.id===a.selected_version?'aria-current="true"':''}><span class="dot ${x.id===a.selected_version?'ok':''}"></span>${esc(x.label||'版本')}<span class="faint">${esc((x.outfit||x.description||'').slice(0,40))}</span><span class="spacer"></span><span class="faint">${x.created?L.timeAgo(x.created):'初始'}</span></button>`).join('')}</div>
-    <p class="faint" style="margin:0">选用其他版本只影响之后新绑定的镜头；已有镜头在「镜头 › 素材」里单独更新。</p>`});
+    <div class="versions">${[...a.versions].reverse().map(x=>{const count=approvals.filter(r=>r.asset_id===aid&&r.version_id===x.id).length,total=viewsOf(x).length;
+      return `<button data-vid="${esc(x.id)}" ${x.id===a.selected_version?'aria-current="true"':''}><span class="dot ${x.id===a.selected_version?'ok':''}"></span>${esc(x.label||'版本')}<span class="faint">${esc((x.outfit||x.description||'').slice(0,40))}</span><span class="spacer"></span>${total?`<span class="chip">${count}/${total} 已批准</span>`:'<span class="chip">无参考图</span>'}${versionUses[x.id]?`<span class="faint">绑定 ${versionUses[x.id]} 镜</span>`:''}<span class="faint">${x.created?L.timeAgo(x.created):'初始'}</span></button>`}).join('')}</div>
+    <p class="faint" style="margin:0">“选用”只改变当前版本，不会改写任何已有镜头的绑定；镜头需在「镜头 › 素材」中单独更新。“已批准”按版本和视图独立记录，新版本不会继承旧版本的批准。</p>`});
   const reopen=()=>{L.render();assetDialog(aid)};
+  const saveView=async(f,action,fields)=>{
+    const file=await L.upload(f,'visual');
+    try { await L.production(action,{asset_id:aid,...fields(file)}); }
+    catch(error) {
+      await L.api('/api/upload/discard',{file}).catch(()=>null);
+      throw error;
+    }
+  };
   $('#asset-images',m)?.addEventListener('click',e=>L.busy(e.currentTarget,async()=>{
     m.close();await assetImages(p,a,v);
+  }));
+  $$('[data-approve-view]',m).forEach(button=>button.onclick=e=>L.busy(e.currentTarget,async()=>{
+    const view=button.dataset.approveView,slot=visuals.find(x=>x.view===view);
+    if(!slot?.file)return;
+    if(approvalsByView.has(view)&&!await L.confirmBox('替换这个视图的已批准参考？','新的参考用于后续生成，既有素材仍保留。','替换参考图'))return;
+    const source=await L.prompt('登记参考图','图片来源或制作说明','','批准参考图');
+    if(!source?.trim())return;
+    const saved=await L.api('/api/assets/approve-reference',{project_id:p.id,asset_id:aid,version_id:v.id,file:slot.file,view,
+      revision:p.revision,source:source.trim(),replace:approvalsByView.has(view)});
+    L.replaceProject(saved);m.close();L.render();L.toast('已批准 '+viewLabel(view));
   }));
   $('#e-save',m).onclick=e=>L.busy(e.currentTarget,async()=>{
     const name=$('#e-name',m).value.trim();if(!name)throw Error('名称不能为空');
     await L.save(p2=>{const x=p2.assets.find(y=>y.id===aid);x.name=name;x.description=$('#e-desc',m).value});L.toast('已保存');reopen();
   });
-  $$('.versions button',m).forEach(b=>b.onclick=()=>L.busy(b,async()=>{if(b.dataset.vid===a.selected_version)return;await L.production('asset_select',{asset_id:aid,version_id:b.dataset.vid});L.toast('已选用这个版本');reopen()}));
+  $$('.versions button',m).forEach(b=>b.onclick=()=>L.busy(b,async()=>{if(b.dataset.vid===a.selected_version)return;await L.production('asset_select',{asset_id:aid,version_id:b.dataset.vid});L.toast('已选用为当前版本；已有镜头绑定不变');reopen()}));
   if(isChar){
     $('#look-save',m).onclick=e=>L.busy(e.currentTarget,async()=>{
       const outfit=$('#look-outfit',m).value.trim();if(!outfit)throw Error('请填写造型');
       await L.production('character_look',{asset_id:aid,outfit,voice_id:$('#look-voice',m).value,label:outfit.slice(0,40)});L.toast('已保存新造型版本');reopen();
     });
-    $$('.view-slot',m).forEach(b=>b.onclick=()=>L.busy(b,async()=>{
+    $$('.view-slot[data-view]',m).forEach(b=>b.onclick=()=>L.busy(b,async()=>{
+      const label=VIEWS[b.dataset.view];
+      if(!await L.confirmBox(`上传「${label}」会创建新的造型版本`,'新版本不会继承旧版本的批准状态；已有镜头仍绑定原版本，不会被改动。上传后需要批准这张视图，正式生成才会使用。','创建新版本并继续'))return;
       const f=await L.pickFile('image/*');if(!f)return;
-      const file=await L.upload(f,'visual');
-      await L.production('character_look',{asset_id:aid,views:{...(v.views||{}),[b.dataset.view]:file},label:(v.outfit||'造型')+' · '+VIEWS[b.dataset.view]});
-      L.toast('已上传'+VIEWS[b.dataset.view]+'视图');reopen();
+      await saveView(f,'character_look',file=>({views:{...(v.views||{}),[b.dataset.view]:file},label:(v.outfit||'造型')+' · '+label}));
+      L.toast('已创建新造型版本并上传'+label+'视图，请批准');reopen();
+    }));
+  }else if(a.kind==='scene'){
+    $('#ref-up',m).onclick=e=>L.busy(e.currentTarget,async()=>{
+      if(!await L.confirmBox('上传主设定图会创建新的场景版本','新版本不会继承旧版本的批准状态；已有镜头仍绑定原版本，不会被改动。','创建新版本并继续'))return;
+      const f=await L.pickFile('image/*');if(!f)return;
+      await saveView(f,'asset_version',file=>({file,label:'主设定图 '+(a.versions.length+1),description:$('#e-desc',m).value}));L.toast('主设定图已保存为新版本，请批准');reopen();
+    });
+    $$('.view-slot[data-scene-view]',m).forEach(b=>b.onclick=()=>L.busy(b,async()=>{
+      const label=SCENE_VIEWS[b.dataset.sceneView];
+      if(!await L.confirmBox(`上传场景「${label}」会创建新的版本`,'新版本不会继承旧版本的批准状态；已有镜头仍绑定原版本，不会被改动。','创建新版本并继续'))return;
+      const f=await L.pickFile('image/*');if(!f)return;
+      await saveView(f,'asset_view',file=>({view:b.dataset.sceneView,file,label}));
+      L.toast('已保存'+label+'视图，请批准');reopen();
     }));
   }else{
     $('#ref-up',m).onclick=e=>L.busy(e.currentTarget,async()=>{
+      if(!await L.confirmBox('上传参考图会创建新的素材版本','新版本不会继承旧版本的批准状态；已有镜头仍绑定原版本，不会被改动。','创建新版本并继续'))return;
       const f=await L.pickFile('image/*');if(!f)return;
-      const file=await L.upload(f,'visual');
-      await L.production('asset_version',{asset_id:aid,file,label:'参考图 '+(a.versions.length+1),description:$('#e-desc',m).value});L.toast('参考图已保存为新版本');reopen();
+      await saveView(f,'asset_version',file=>({file,label:'参考图 '+(a.versions.length+1),description:$('#e-desc',m).value}));L.toast('参考图已保存为新版本，请批准');reopen();
     });
   }
 }
 async function assetImages(project,asset,version){
   const scope={project_id:project.id,asset_id:asset.id};
+  version=version||current(asset);
   const items=await L.api('/api/assets/image-candidates',scope);
+  const reference=picOf(asset);
+  const done=items.filter(item=>item.file),waiting=items.filter(item=>!item.file&&['queued','running','interrupted'].includes(item.state));
+  const failed=items.filter(item=>!item.file&&!['queued','running','interrupted'].includes(item.state));
+  const meta=item=>[item.approved?'已存入版本库':null,item.model,
+    item.estimated_cny?`估价 ¥${item.estimated_cny}`:null,item.actual_cny?`实扣 ¥${item.actual_cny}`:null,
+    item.created?L.timeAgo(item.created):null].filter(Boolean).join(' · ');
   const dialog=L.modal({title:asset.name+' · 制作参考',wide:true,body:`
     <label class="field"><span>画面要求</span><textarea data-instruction maxlength="2000" rows="3">${asset.kind==='character'?'四分之三角度，服装和脸部清晰，柔和光线，简洁背景。':'展示主要地标、空间布局与灯光方向，画内无人。'}</textarea></label>
-    <button class="btn small" data-quote>预览请求与费用</button>
-    <div class="grid2">${items.filter(item=>item.file&&item.state==='succeeded').map(item=>`
-      <figure><img src="${L.media(item.file)}" alt="${esc(asset.name)}参考候选" style="max-width:100%;max-height:32vh;object-fit:contain">
-      <figcaption>${item.approved?'已存入版本库':`<button class="btn small" data-approve="${esc(item.id)}">批准为新版本</button>`}</figcaption></figure>`).join('')}</div>`,
-    foot:'<button class="btn" data-close>关闭</button>'});
+    <div class="row"><button class="btn small" data-quote>预览请求与费用</button><span class="faint">候选会保留，不会覆盖已有版本。</span></div>
+    ${reference?`<div class="sub">当前选用的版本</div><img src="${L.media(reference)}" alt="当前版本参考" style="max-width:100%;max-height:26vh;object-fit:contain">`:''}
+    ${done.length?`<div class="sub">候选（${done.length}）</div><div class="grid2">${done.map(item=>`
+      <figure style="margin:0"><img src="${L.media(item.file)}" alt="${esc(asset.name)}参考候选" style="max-width:100%;max-height:32vh;object-fit:contain">
+      <figcaption class="faint">${esc(meta(item))}${item.approved?'<br><span class="chip">已批准参考</span>':`<br><button class="btn small" data-approve="${esc(item.id)}">批准为新版本</button>`}</figcaption></figure>`).join('')}</div>`:'<p class="faint">还没有制作完成的参考候选。</p>'}
+    ${waiting.length?`<p class="faint">${waiting.length} 个候选仍在生成，完成后刷新查看。</p>`:''}
+    ${failed.length?`<div class="sub">未完成（${failed.length}）</div>${failed.map(item=>`<p class="faint">${item.created?L.timeAgo(item.created)+' · ':''}${esc(item.state)}${item.error?' · '+esc(item.error):''}</p>`).join('')}`:''}
+    <label class="row"><input type="checkbox" data-select checked><span class="faint">批准后同时设为当前版本（只影响之后新绑定的镜头）</span></label>`,
+    foot:'<button class="btn" data-refresh>刷新</button><button class="btn" data-close>关闭</button>'});
+  $('[data-refresh]',dialog).onclick=()=>{dialog.close();assetImages(L.project(),L.project().assets.find(x=>x.id===asset.id)).catch(L.fail)};
   $('[data-quote]',dialog).onclick=e=>L.busy(e.currentTarget,async()=>{
-    const request={...scope,version_id:version.id,episode_id:L.S.eid,kind:'asset_image',instruction:$('[data-instruction]',dialog).value};
-    const quote=await L.api('/api/jobs/quote',request);
-    const enabled=quote.configured&&L.S.data.spending.remaining>=quote.authorization_calls;
+    let request={...scope,version_id:version.id,episode_id:L.S.eid,kind:'asset_image',instruction:$('[data-instruction]',dialog).value};
+    let quote;
+    try{quote=await L.api('/api/jobs/quote',request)}
+    catch(err){
+      if(!/未批准/.test(err.message))throw err;
+      if(!await L.confirmBox('当前版本没有已批准视图','未批准的视图默认不会进入模型请求。是否明确使用未批准视图，只为本次参考图生成？','使用未批准视图预览'))return;
+      request={...request,allow_unapproved:true};
+      quote=await L.api('/api/jobs/quote',request);
+    }
     dialog.close();
-    const confirm=L.modal({title:'确认制作参考',body:`<p>${esc(quote.model_label)} · ${esc(L.quoteCost(quote))}</p>
-      <p>${esc(quote.prompt||request.instruction)}</p>
-      ${quote.references.map(ref=>`<img style="max-width:100%;max-height:24vh;object-fit:contain" src="${L.media(ref.file)}" alt="${esc(ref.label)}">`).join('')}`,
-      foot:`<button class="btn" data-close>取消</button><button class="btn primary" data-send ${enabled?'':'disabled'}>确认费用并生成</button>`});
-    const nonce=crypto.randomUUID();
-    $('[data-send]',confirm).onclick=e=>L.busy(e.currentTarget,async()=>{
-      await L.api('/api/jobs',{...request,quote_digest:quote.digest,nonce});
-      confirm.close();await L.refresh();L.toast('已加入生成队列');L.openDrawer();
-    });
+    async function showQuote(request,quote){
+      const enabled=quote.configured&&L.S.data.spending.remaining>=quote.authorization_calls;
+      const statusLabel=status=>status==='approved'?'已批准':status==='legacy'?'旧版批准':'未批准';
+      const confirm=L.modal({title:'确认制作参考',body:`<p>${esc(quote.model_label)} · ${esc(L.quoteCost(quote))}${quote.art_label?' · '+esc(quote.art_label):''}</p>
+        ${quote.approval_notice?`<p class="notice wait">${esc(quote.approval_notice)}</p>`:''}
+        ${quote.excluded_references?.length?`<p class="faint">未进入本次请求：${quote.excluded_references.map(r=>esc(r.label+'（'+r.reason+'）')).join('、')}</p>`:''}
+        <p>${esc(quote.prompt||request.instruction)}</p>
+        ${quote.references.map(ref=>`<figure style="margin:0 0 8px"><img style="max-width:100%;max-height:24vh;object-fit:contain" src="${L.media(ref.file)}" alt="${esc(ref.label)}"><figcaption class="faint">${esc(statusLabel(ref.status))} · ${esc(ref.label)}</figcaption></figure>`).join('')}`,
+        foot:`<button class="btn" data-close>取消</button>${quote.requires_approval?'<button class="btn" data-include>预览包含未批准视图的请求</button>':''}<button class="btn primary" data-send ${enabled?'':'disabled'}>确认费用并生成</button>`});
+      const include=$('[data-include]',confirm);
+      if(include)include.onclick=e=>L.busy(e.currentTarget,async()=>{
+        const revised={...request,allow_unapproved:true};
+        const updated=await L.api('/api/jobs/quote',revised);
+        confirm.close();
+        await showQuote(revised,updated);
+      });
+      const nonce=crypto.randomUUID();
+      $('[data-send]',confirm).onclick=e=>L.busy(e.currentTarget,async()=>{
+        await L.api('/api/jobs',{...request,quote_digest:quote.digest,nonce});
+        confirm.close();await L.refresh();L.toast('已加入生成队列');L.openDrawer();
+      });
+    }
+    await showQuote(request,quote);
   });
   $$('[data-approve]',dialog).forEach(button=>button.onclick=e=>L.busy(e.currentTarget,async()=>{
-    if(!await L.confirmBox('批准这张参考图？','新版本进入素材库。可以在镜头页面指定它。','批准为新版本'))return;
-    const saved=await L.api('/api/assets/approve-image',{...scope,job_id:button.dataset.approve,revision:L.project().revision});
-    L.replaceProject(saved);dialog.close();L.render();L.toast('新版本已保存');
+    const select=$('[data-select]',dialog).checked;
+    if(!await L.confirmBox('批准这张参考图？',select?'会保存为新版本并设为当前版本，只影响之后新绑定的镜头。':'会保存为新版本，当前选用版本不变。','批准为新版本'))return;
+    const saved=await L.api('/api/assets/approve-image',{...scope,job_id:button.dataset.approve,revision:L.project().revision,select});
+    L.replaceProject(saved);dialog.close();L.render();L.toast(select?'已批准并设为当前版本':'新版本已保存');
   }));
 }
 L.assetDialog=assetDialog;

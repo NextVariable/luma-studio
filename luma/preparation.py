@@ -1,10 +1,12 @@
 """Offline production preparation. Model capabilities are server-owned, never LLM claims."""
 import copy
+import hashlib
 import math
 import uuid
 from . import creative
 from . import continuity
 from . import domestic_media, fal_media
+from . import art, visual
 
 # Only provider models with a documented input/output contract belong here.
 MODELS = {**fal_media.PROFILES, domestic_media.WAN: domestic_media.WAN_PROFILE,
@@ -31,12 +33,17 @@ def character_versions(p,s):
 
 def catalog(p,s):
     items=[]
+    approvals=(p['creative_brief'].get('visual_bible') or {}).get('references',[])
     for aid,vid in s['asset_bindings'].items():
         a=next(a for a in p['assets'] if a['id']==aid)
         if a['kind']=='voice':continue
         v=next(v for v in a['versions'] if v['id']==vid)
+        states={state['view']:state for state in visual.view_states(v,approvals,a['kind'],aid,vid)}
         for view,file in {**({'primary':v['file']} if v.get('file') else {}),**v.get('views',{})}.items():
-            items.append({'source':'asset','asset_id':aid,'version_id':vid,'view':view,'file':file,'label':a['name']+' · '+{'primary':'设定图','front':'正面','side':'侧面','back':'背面','three_quarter':'四分之三侧面'}.get(view,view)})
+            state=states.get(view) or {'status':'unapproved'}
+            items.append({'source':'asset','asset_id':aid,'version_id':vid,'view':view,'file':file,
+                          'approved':state['status']!='unapproved','approval_status':state['status'],
+                          'label':a['name']+' · '+{'primary':'设定图','front':'正面','side':'侧面','back':'背面','three_quarter':'四分之三侧面'}.get(view,view)})
     # A video can replace the selected image without invalidating its pinned first frame.
     from .production import content_basis
     frames = {}
@@ -53,6 +60,25 @@ def catalog(p,s):
         items.append({'source':'continuity','shot_id':previous['id'],'file':previous['image'],'label':'承接镜头已选图'})
     for item in items:item['reference_id']=creative.digest({k:v for k,v in item.items() if k!='label'})[:24]
     return items
+
+
+def approval_review(refs):
+    """Asset references in one segment, split by approval state.
+
+    Unapproved asset views may only enter a formal request after an explicit,
+    per-request confirmation; they are never promoted to approvals by generating.
+    """
+    used=[];unapproved=[]
+    for ref in refs:
+        if ref.get('source')!='asset':continue
+        row={key:ref.get(key) for key in ('role','asset_id','version_id','view','file','approval_status','label')}
+        used.append(row)
+        if row['approval_status']=='unapproved':unapproved.append(row)
+    notice=''
+    if unapproved:
+        notice=('本次生成将使用未批准的资产参考图：'+'、'.join(dict.fromkeys(r['label'] for r in unapproved))
+                +'。这些视图不会写入批准记录，只进入本次请求。')
+    return dict(used=used,unapproved=unapproved,requires_confirmation=bool(unapproved),notice=notice)
 
 
 def seed(p,sid,kind='video'):
@@ -118,7 +144,7 @@ def current_issue(p,s):
     return None
 
 
-def report(p,sid,media_path,connected=None,profiles=None):
+def report(p,sid,media_path,connected=None,profiles=None,allow_unapproved=False):
     s=shot_of(p,sid);plan=s.get('preparation');errors=[];rows=[]
     def error(message,segment_id=None):errors.append({'segment_id':segment_id,'message':message})
     if not plan:return {'ready':False,'issues':[{'segment_id':None,'message':'尚未保存制作准备'}],'segments':[]}
@@ -139,6 +165,12 @@ def report(p,sid,media_path,connected=None,profiles=None):
     for seg in plan['segments']:
         sid2=seg['id'];duration=seg['end']-seg['start'];refs=[{**available[r['reference_id']],'role':r['role']} for r in seg['references']]
         counts={role:sum(r['role']==role for r in refs) for role in ROLES};mode=seg['mode'];profile=profiles.get(seg['model'])
+        # Every formal path shares one gate: a version that never recorded approvals
+        # (legacy works included) cannot send unapproved asset views silently.
+        approval=approval_review(refs)
+        if approval['unapproved'] and not allow_unapproved:
+            error('资产参考视图尚未批准：'+'、'.join(dict.fromkeys(r['label'] for r in approval['unapproved']))
+                  +'；请先在素材中批准，或确认本次使用未批准视图',sid2)
         if len(refs)>10:error('当前工作流最多接收10个参考文件，不能静默截断',sid2)
         if not seg['instruction'].strip():error('请明确这一片段的动作要求',sid2)
         if len(plan['segments'])>1:
@@ -179,18 +211,36 @@ def report(p,sid,media_path,connected=None,profiles=None):
         if connected is not None:
             service_ready = bool(fal_media.key()) if profile and profile.get('provider') == 'fal' else bool(domestic_media.key(profile['provider'])) if profile and profile.get('provider') in domestic_media.KEYS else connected(seg['kind'])
             if not service_ready:error('对应生成服务尚未连接',sid2)
-        rows.append({'id':sid2,'start':seg['start'],'end':seg['end'],'duration':duration,'kind':seg['kind'],'model':seg['model'],'mode':mode,'parameters':copy.deepcopy(seg['parameters']),'references':refs})
+        approval['allow_unapproved']=bool(approval['unapproved']) and allow_unapproved
+        if approval['allow_unapproved']:
+            approval['requires_confirmation']=False
+        rows.append({'id':sid2,'start':seg['start'],'end':seg['end'],'duration':duration,'kind':seg['kind'],'model':seg['model'],'mode':mode,'parameters':copy.deepcopy(seg['parameters']),'references':refs,'approval':approval})
     return {'ready':not errors,'issues':errors,'segments':rows,'plan_digest':creative.digest(plan),'operation_count':len(rows)}
 
 
-def freeze(p,sid,kind,segment_id,media_path,connected):
-    result=report(p,sid,media_path,connected)
+def freeze(p,sid,kind,segment_id,media_path,connected,allow_unapproved=False):
+    result=report(p,sid,media_path,connected,allow_unapproved=allow_unapproved)
     if not result['ready']:raise ValueError('制作准备未就绪：'+'；'.join(dict.fromkeys(i['message'] for i in result['issues'])))
     s=shot_of(p,sid);segments=s['preparation']['segments']
     if not segment_id and len(segments)!=1:raise ValueError('请指定本次生成片段，不能将多片段当作整镜提交')
     seg=next((x for x in segments if x['id']==(segment_id or segments[0]['id'])),None)
     if not seg or seg['kind']!=kind:raise ValueError('生成片段不存在或类型不一致')
     profile=MODELS[seg['model']];row=next(x for x in result['segments'] if x['id']==seg['id'])
-    return {**copy.deepcopy(row),'shot_id':sid,'plan_digest':result['plan_digest'],'model_profile_digest':creative.digest(profile),
-            'provider':profile['provider'],'contract':profile['contract'],'instruction':seg['instruction'],
+    row=copy.deepcopy(row)
+    approvals = (p['creative_brief'].get('visual_bible') or {}).get('references', [])
+    for ref in row['references']:
+        with media_path(ref['file']).open('rb') as stream:
+            ref['sha256']=hashlib.file_digest(stream,'sha256').hexdigest()
+        if ref.get('approval_status')=='approved':
+            asset = next(a for a in p['assets'] if a['id']==ref['asset_id'])
+            version = next(v for v in asset['versions'] if v['id']==ref['version_id'])
+            approved = dict(visual.approved_refs(approvals,asset['kind'],asset['id'],version['id'],version))
+            if ref['sha256']!=approved[ref['view']]['sha256']:
+                raise ValueError('已批准的参考图文件发生变化')
+    instruction=seg['instruction']
+    if kind=='video':
+        clause=art.video_clause(p['creative_brief'])
+        if len(instruction)+len(clause)<=2000:instruction=(instruction+' '+clause).strip()
+    return {**row,'shot_id':sid,'plan_digest':result['plan_digest'],'model_profile_digest':creative.digest(profile),
+            'provider':profile['provider'],'contract':profile['contract'],'instruction':instruction,
             'start_state':seg['start_state'],'end_state':seg['end_state'],'character_versions':copy.deepcopy(s['preparation']['character_versions'])}

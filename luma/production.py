@@ -7,12 +7,12 @@ import uuid
 from . import creative
 
 from . import visual
+from . import art
 
 LEGACY_SHOT_FIELDS = ('description', 'duration', 'framing', 'camera', 'dialogue', 'lines', 'asset_ids', 'asset_bindings', 'continuity_from')
 SHOT_FIELDS = LEGACY_SHOT_FIELDS + ('creative_spec',)
 FRAME_MODES = ('references', 'start_own', 'start_continuity')  # how a video starts; not part of the text plan basis
 BRIEF_DEFAULTS ={'format':'16:9', 'method':'mixed', 'style':''}
-CHARACTER_VIEWS=('front','side','back','three_quarter')
 VOICE_IDS=('alloy','ash','ballad','coral','echo','fable','onyx','nova','sage','shimmer','verse','marin','cedar')
 
 def digest(value):
@@ -60,11 +60,12 @@ def preserve_history(old, p):
     for s in p['shots']:
         s['asset_bindings']={a['id']:s.get('asset_bindings',{}).get(a['id'],a['selected_version']) for a in p['assets'] if a['id'] in s.get('asset_ids',[])}
 
-def validate(p, media_path):
+def validate(p, media_path, previous_refs=()):
     brief=p['creative_brief']
     if not isinstance(brief,dict) or brief.get('format') not in ('16:9','9:16') or brief.get('method') not in ('mixed','illustrated','video'):
         raise ValueError('请选择有效的画幅和制作方式')
     if not isinstance(brief.get('style'),str) or len(brief['style'])>2000:raise ValueError('视觉风格最多 2000 字')
+    if brief.get('art_style') not in (None,'','auto',*art.STYLES):raise ValueError('请选择有效的美术风格')
     assets={a['id']:a for a in p['assets']}
     for a in p['assets']:
         ids=[v['id'] for v in a['versions']]
@@ -72,11 +73,11 @@ def validate(p, media_path):
         for v in a['versions']:
             if v.get('file'):media_path(v['file'])
             views=v.get('views',{})
-            if not isinstance(views,dict) or not set(views)<=set(CHARACTER_VIEWS):raise ValueError('角色视角无效')
+            if not isinstance(views,dict) or not set(views)<=set(visual.allowed_views(a['kind']))-{'primary'}:raise ValueError('资产视角无效')
             for file in views.values():media_path(file)
             if not isinstance(v.get('outfit',''),str) or len(v.get('outfit',''))>200:raise ValueError('服装名称最多 200 字')
             if v.get('voice_id','alloy') not in VOICE_IDS:raise ValueError('角色音色无效')
-    visual.validate_bible(brief, assets, media_path)
+    visual.validate_bible(brief, assets, media_path, previous_refs)
     for s in p['shots']:
         ids=[t['id'] for t in s['takes']]
         if len(ids)!=len(set(ids)):raise ValueError('素材候选 ID 重复')

@@ -51,6 +51,13 @@ function card(j,p){
   if(['image','video','audio','assemble'].includes(j.kind)&&j.state==='succeeded'&&target)btns.push(`<button class="btn small" data-act="shot" data-job="${esc(j.id)}">去这一镜</button>`);
   if(L.canReconcile(j))btns.push(`<button class="btn small" data-act="reconcile" data-job="${esc(j.id)}">${L.parseResult(j).candidate_file?'恢复入库':'查询远程结果'}</button>`);
   if(j.batch_id&&['queued','paused'].includes(j.state))btns.push(`<button class="btn small" data-act="${j.state==='queued'?'batch-pause':'batch-resume'}" data-job="${esc(j.id)}">${j.state==='queued'?'暂停此批待处理项':'继续此批'}</button>`);
+  if(['succeeded','failed','interrupted'].includes(j.state)&&(r.provider_request_id||r.run_id||r.submission_started_at)&&j.provider)
+    btns.push(`<button class="btn small" data-act="bill" data-job="${esc(j.id)}">记账</button>`);
+  if(j.generation_unit&&j.provider)extra+=`<details><summary>请求与费用证据</summary>
+    <p>${esc(j.provider.model||'')}${r.provider_request_id?' · 请求 '+esc(r.provider_request_id):''}${r.run_id?' · 任务 '+esc(r.run_id):''}</p>
+    ${(j.generation_unit.references||[]).map(ref=>`<p><code>${esc(ref.sha256)}</code></p>`).join('')}
+    ${r.output_sha256?`<p>产物 <code>${esc(r.output_sha256)}</code></p>`:''}
+    <p>${r.actual_cny!=null?'人工核对 ¥'+esc(r.actual_cny):'费用待账单核对'}</p></details>`;
   if(L.canCancel(j))btns.push(`<button class="btn small ghost danger" data-act="cancel" data-job="${esc(j.id)}">取消</button>`);
   return `<article class="job"><div class="job-top"><span class="dot ${tone}"></span><b>${esc(L.jobName(j.kind))}</b><span class="faint">${esc(L.jobState(j.state))}</span><time>${L.timeAgo(j.updated)}</time></div>
     ${(ep&&L.ui.jobScope==='all')||target?`<div class="faint">${ep&&L.ui.jobScope==='all'?esc(ep.title):''}${target?' '+esc(L.shotTitle(target)):''}</div>`:''}
@@ -79,6 +86,14 @@ async function act(b,p){
     if(kind==='reconcile'){await L.api('/api/reconcile',{project_id:p.id,job_id:j.id});L.toast(L.parseResult(j).candidate_file?'正在恢复入库':'正在查询远程结果，不会重复提交')}
     if(kind==='batch-pause'||kind==='batch-resume'){
       await L.api('/api/jobs/batch/state',{project_id:p.id,batch_id:j.batch_id,action:kind==='batch-pause'?'pause':'resume'});
+    }
+    if(kind==='bill'){
+      const amount=await L.prompt('记账','人民币实扣金额',L.parseResult(j).actual_cny||'','继续');
+      if(amount==null)return;
+      const evidence=await L.prompt('账单依据','账单条目或凭证说明','','保存');
+      if(!evidence?.trim())return;
+      await L.api('/api/jobs/bill',{project_id:p.id,job_id:j.id,actual_cny:amount.trim(),evidence:evidence.trim()});
+      L.toast('已记录人工账单核对');
     }
     if(kind==='cancel'){
       if(!await L.confirmBox('取消这条任务？','本地会停止跟进；已经发出的外部调用可能仍在执行并计费。','取消任务',true))return;

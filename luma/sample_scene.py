@@ -1,4 +1,5 @@
 """Editable, locally illustrated three-shot scene with bundled dialogue."""
+import hashlib
 import shutil
 import uuid
 import wave
@@ -62,6 +63,15 @@ def create(media, save):
                 duration = wav.getnframes() / wav.getframerate()
             shot['lines'][0].update(audio_take_id=voice['id'], audio_duration=duration, audio_start=0.6)
             shot.update(approved=True, needs_review=False)
+        # The bundled sample is a ready-made work; its own stills are approved so the
+        # documented storyboard flow works without a manual approval round.
+        bible = project['creative_brief'].setdefault('visual_bible', {})
+        bible['references'] = [
+            dict(role=asset['kind'], asset_id=asset['id'], version_id=version['id'],
+                 file=version['file'], source='示例素材', view='primary',
+                 sha256=hashlib.sha256((media / version['file']).read_bytes()).hexdigest())
+            for asset in project['assets'] for version in asset['versions'] if version.get('file')
+        ]
         return save(project, 0)
     except Exception:
         for path in copied:
