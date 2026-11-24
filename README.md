@@ -2,9 +2,9 @@
 
 [![CI](https://github.com/NextVariable/luma-studio/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/NextVariable/luma-studio/actions/workflows/ci.yml)
 
-A local-first production workspace for episodic motion comics. Keep character looks, shots, and dialogue together, revise one shot at a time, and export the episode as an MP4.
+A shot-driven AI Director Studio for episodic film. Keep character looks, shots, and dialogue together, revise one shot at a time, and export the episode as an MP4.
 
-[简体中文](README.zh-CN.md) · [Architecture](docs/architecture.md) · [Provider setup](docs/providers.md) · [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md)
+[简体中文](README.zh-CN.md) · [Product spec](docs/product-spec.md) · [Architecture](docs/architecture.md) · [Provider setup](docs/providers.md) · [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md)
 
 **Developer preview.** The local production and delivery workflow works with imported media and requires no model account. Cloud generation adapters are available with your own credentials. A full cloud-generated episode has yet to pass end-to-end acceptance.
 

@@ -2,9 +2,9 @@
 
 [![CI](https://github.com/NextVariable/luma-studio/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/NextVariable/luma-studio/actions/workflows/ci.yml)
 
-流幕是面向分集漫剧的本机制作工作台。把剧本、角色造型、镜头和对白放在同一部作品里，按镜头返工，最后导出整集 MP4。
+流幕是镜头驱动的 AI 导演工作台（AI Director Studio）。把剧本、角色造型、镜头和对白放在同一部作品里，按镜头返工，最后导出整集 MP4。
 
-[English](README.md) · [架构与数据](docs/architecture.md) · [服务配置](docs/providers.md) · [贡献指南](CONTRIBUTING.md) · [更新记录](CHANGELOG.md)
+[English](README.md) · [产品规格](docs/product-spec.md) · [架构与数据](docs/architecture.md) · [服务配置](docs/providers.md) · [贡献指南](CONTRIBUTING.md) · [更新记录](CHANGELOG.md)
 
 **当前为开发预览版。** 导入素材后可以在本机完成制作、复核和导出，无需模型账号。云端生成可使用自己的服务商凭据，完整的云端生成成片仍待端到端验收。
 
