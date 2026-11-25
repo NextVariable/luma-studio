@@ -200,7 +200,7 @@ setInterval(async()=>{
   finally{polling=false}
 },2000);
 
-(async()=>{
+L.studioReady=(async()=>{
   try{await L.refresh();sig=signature(L.S.data);L.render()}
   catch(e){$('#view').innerHTML=`<div class="library"><div class="empty-state"><h2>连不上流幕服务</h2><p>${esc(e.message)}</p><p class="faint">在项目目录运行 python3 studio.py 后刷新页面。</p></div></div>`}
 })();
