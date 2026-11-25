@@ -3,7 +3,7 @@ const TAU = Math.PI * 2;
 const FLOOR = -2.85;
 const WALL_RADIUS = 13.1;
 const MAIN_Z = .42;
-const MAIN_WIDTH = 7.8;
+const MAIN_WIDTH = 6.9;
 const mix = (a, b, t) => a + (b - a) * t;
 export const ramp = (a, b, p) => {
   const t = Math.min(1, Math.max(0, (p - a) / (b - a)));
@@ -20,9 +20,9 @@ export function cameraAt(progress, aspect, pointer = [0, 0]) {
   const wideDistance = Math.max(21.5, dockDistance * 1.82);
   const travel = ramp(0, 1, progress);
   const straighten = 1 - ramp(.24, .72, progress);
-  const eye = [(2.22 + pointer[0] * .48)*straighten, (.96 + pointer[1]*.3)*straighten,
+  const eye = [(-3.9 + pointer[0] * .6)*straighten, (1.5 + pointer[1]*.3)*straighten,
     MAIN_Z + mix(wideDistance, dockDistance, travel)];
-  const aim = [.05*straighten, -.17*straighten, MAIN_Z];
+  const aim = [-.42*straighten, -1.43*straighten, MAIN_Z];
   const forward = unit(aim.map((point,i) => point-eye[i]));
   const right = unit(cross(forward,[0,1,0]));
   const up = cross(right,forward);
@@ -49,12 +49,20 @@ const roomFragment = `
 precision highp float;
 varying vec2 vRay;
 uniform vec3 uEye,uRight,uUp,uForward;
+uniform vec3 uPlateEye,uPlateRight,uPlateUp,uPlateForward;
 uniform vec2 uLens;
-uniform float uTime;
+uniform float uTime,uRoomBlend;
+uniform sampler2D uPlate;
 float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
 float noise(vec2 p){
   vec2 i=floor(p),f=fract(p); f=f*f*(3.-2.*f);
   return mix(mix(hash(i),hash(i+vec2(1,0)),f.x),mix(hash(i+vec2(0,1)),hash(i+1.),f.x),f.y);
+}
+float boxEntry(vec3 origin,vec3 direction,vec3 lo,vec3 hi){
+  vec3 toA=(lo-origin)/direction, toB=(hi-origin)/direction;
+  vec3 first=min(toA,toB), last=max(toA,toB);
+  float near=max(first.x,max(first.y,first.z)), far=min(last.x,min(last.y,last.z));
+  return far>=max(near,0.)&&near>0.?near:1000.;
 }
 void main(){
   vec3 d=normalize(uForward+(vRay.x*uRight*uLens.x+vRay.y*uUp)/uLens.y);
@@ -110,7 +118,17 @@ void main(){
   float vignette=1.-.25*dot(vRay*vec2(.62,.62),vRay);
   c=pow(max(c*vignette,0.),vec3(.80));
   c+=.012*(hash(gl_FragCoord.xy)-.5);
-  gl_FragColor=vec4(c,1.);
+  // Reproject the same daylight room onto its wall, floor and nearer sofa volume.
+  // The reference view has no parallax error. A moving camera samples fixed world positions.
+  float sofa=boxEntry(uEye,d,vec3(-3.3,-2.84,12.9),vec3(9.3,-1.20,16.4));
+  vec3 at=uEye+d*min(t,sofa)-uPlateEye;
+  float depth=max(.02,dot(at,uPlateForward));
+  vec2 point=vec2(dot(at,uPlateRight)*uLens.y/uLens.x,-dot(at,uPlateUp)*uLens.y)/depth*.5+.5;
+  vec2 edge=min(point,1.-point);
+  float inPlate=smoothstep(-.045,-.002,min(edge.x,edge.y));
+  vec3 photo=texture2D(uPlate,point).rgb;
+  c=mix(c,vec3(.68,.56,.43),.48);
+  gl_FragColor=vec4(mix(c,photo,inPlate*uRoomBlend),1.);
 }
 `;
 const screenVertex = `
@@ -177,7 +195,7 @@ function strip(steps, position) {
   return new Float32Array(vertices);
 }
 
-export function makeScene(canvas, wallArt, mainArt) {
+export function makeScene(canvas, wallArt, mainArt, roomArt) {
   const gl = canvas.getContext('webgl',{antialias:false,alpha:false, powerPreference:'high-performance'});
   if (!gl) throw Error('WebGL unavailable');
   const room = program(gl,roomVertex,roomFragment), screen = program(gl,screenVertex,screenFragment);
@@ -202,16 +220,18 @@ export function makeScene(canvas, wallArt, mainArt) {
   };
   const quad=mesh(new Float32Array([-1,-1,1,-1,-1,1,1,1]));
   const wallShape=strip(76,(u,y) => {
-    const angle=(u-.5)*TAU/4.24;
-    return [Math.sin(angle)*WALL_RADIUS,mix(-2.14,3.02,y),WALL_RADIUS*(1-Math.cos(angle))-.34];
+    const angle=(u-.5)*TAU/3.96;
+    return [Math.sin(angle)*WALL_RADIUS,mix(-2.00,4.24,y),WALL_RADIUS*(1-Math.cos(angle))-.34];
   });
   const wall=mesh(wallShape), main=mesh(new Float32Array(20),true);
-  const wallTex=texture(wallArt), mainTex=texture(mainArt);
+  const wallTex=texture(wallArt), mainTex=texture(mainArt), roomTex=texture(roomArt);
   const roomPoint=gl.getAttribLocation(room,'aPoint');
   const world=gl.getAttribLocation(screen,'aWorld'), uv=gl.getAttribLocation(screen,'aUV');
   const locations = p => Object.fromEntries(['Eye','Right','Up','Forward','Lens','Time','Reflection','Fade','Portal','Dock','Image']
     .map(key=>[key,gl.getUniformLocation(p,'u'+key)]));
   const roomU=locations(room), screenU=locations(screen);
+  const photoUniforms=Object.fromEntries(['Eye','Right','Up','Forward','Blend','Sampler'].map(
+    key=>[key,gl.getUniformLocation(room,key==='Blend'?'uRoomBlend':key==='Sampler'?'uPlate':'uPlate'+key)]));
   gl.useProgram(screen); gl.uniform1i(screenU.Image,0);
   gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
   const uniforms=(u,camera,time) => {
@@ -219,17 +239,17 @@ export function makeScene(canvas, wallArt, mainArt) {
     gl.uniform3fv(u.Up,camera.up); gl.uniform3fv(u.Forward,camera.forward);
     gl.uniform2f(u.Lens,camera.aspect,camera.focal); gl.uniform1f(u.Time,time);
   };
-  function drawScreen(buffer,tex,count,reflect,isMain) {
+  function drawScreen(buffer,tex,count,reflect,isMain,fade=1) {
     gl.bindBuffer(gl.ARRAY_BUFFER,buffer);
     gl.enableVertexAttribArray(world); gl.vertexAttribPointer(world,3,gl.FLOAT,false,20,0);
     gl.enableVertexAttribArray(uv); gl.vertexAttribPointer(uv,2,gl.FLOAT,false,20,12);
-    gl.uniform1f(screenU.Reflection,reflect); gl.uniform1f(screenU.Fade,1); gl.uniform1f(screenU.Portal,isMain);
+    gl.uniform1f(screenU.Reflection,reflect); gl.uniform1f(screenU.Fade,fade); gl.uniform1f(screenU.Portal,isMain);
     gl.bindTexture(gl.TEXTURE_2D,tex); gl.drawArrays(gl.TRIANGLE_STRIP,0,count);
     gl.disableVertexAttribArray(world); gl.disableVertexAttribArray(uv);
   }
   let ratio;
   return {
-    draw(camera,time,docking) {
+    draw(camera,time,docking,progress) {
       if (ratio!==camera.aspect) {
         ratio=camera.aspect;
         gl.bindBuffer(gl.ARRAY_BUFFER,main);
@@ -241,17 +261,27 @@ export function makeScene(canvas, wallArt, mainArt) {
       gl.clear(gl.DEPTH_BUFFER_BIT);
       gl.disable(gl.BLEND); gl.disable(gl.DEPTH_TEST);
       gl.useProgram(room); uniforms(roomU,camera,time);
+      const plate=cameraAt(0,camera.aspect);
+      gl.uniform3fv(photoUniforms.Eye,plate.eye); gl.uniform3fv(photoUniforms.Right,plate.right);
+      gl.uniform3fv(photoUniforms.Up,plate.up); gl.uniform3fv(photoUniforms.Forward,plate.forward);
+      gl.uniform1f(photoUniforms.Blend,1-ramp(.60,.94,progress));
+      gl.uniform1i(photoUniforms.Sampler,0);
+      gl.bindTexture(gl.TEXTURE_2D,roomTex);
       gl.bindBuffer(gl.ARRAY_BUFFER,quad); gl.enableVertexAttribArray(roomPoint);
       gl.vertexAttribPointer(roomPoint,2,gl.FLOAT,false,0,0); gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
       gl.disableVertexAttribArray(roomPoint);
       gl.useProgram(screen); uniforms(screenU,camera,time); gl.uniform1f(screenU.Dock,docking);
       gl.enable(gl.BLEND);
-      drawScreen(wall,wallTex,wallShape.length/5,1,0); drawScreen(main,mainTex,4,1,1);
+      const reflection=ramp(.65,.95,progress)*.28;
+      if(reflection>0){
+        drawScreen(wall,wallTex,wallShape.length/5,1,0,reflection);
+        drawScreen(main,mainTex,4,1,1,reflection);
+      }
       gl.disable(gl.BLEND); gl.enable(gl.DEPTH_TEST);
       drawScreen(wall,wallTex,wallShape.length/5,0,0); drawScreen(main,mainTex,4,0,1);
     },
     update() {
-      for (const [tex,source] of [[wallTex,wallArt],[mainTex,mainArt]]) {
+      for (const [tex,source] of [[wallTex,wallArt],[mainTex,mainArt],[roomTex,roomArt]]) {
         gl.bindTexture(gl.TEXTURE_2D,tex);
         gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,source);
       }

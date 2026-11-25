@@ -29,7 +29,7 @@ function showEntrance() {
       <div class="spatial-chrome">
         <div class="spatial-brand"><img src="/assets/luma-mark.png" alt="">Luma <span>流幕</span></div>
         <div class="spatial-bottom">
-          <h1 class="spatial-title">Enter your studio.</h1>
+          <h1 class="spatial-title spatial-visually-hidden">Enter your studio.</h1>
           <div class="spatial-actions">
             <button class="spatial-scroll" type="button" hidden>滚动进入 <i aria-hidden="true"></i></button>
             <button class="spatial-enter" type="button">进入工作室 <span aria-hidden="true">↗</span></button>
@@ -97,7 +97,7 @@ function showEntrance() {
     if (art.resize(width/height)) scene.update();
     const camera=cameraAt(p,width/height,pointer);
     if(now-lastDraw>18 || progress!==render.progress) {
-      scene.draw(camera,(now-clock)*.001,ramp(.77,.92,p));
+      scene.draw(camera,(now-clock)*.001,ramp(.77,.92,p),p);
       lastDraw=now; render.progress=progress;
     }
     title.style.opacity=brand.style.opacity=String(1-ramp(.26,.66,p));
@@ -161,7 +161,7 @@ function showEntrance() {
     if (initial) await art.load(initial);
     if (!alive || reduced.matches) return;
     try {
-      scene=makeScene(canvas,art.wall,art.main);
+      scene=makeScene(canvas,art.wall,art.main,art.room);
       intro.classList.remove('spatial-fallback'); canvas.hidden=false; hint.hidden=false; bar.hidden=false;
       frame=requestAnimationFrame(render);
       ready.then(async()=>{

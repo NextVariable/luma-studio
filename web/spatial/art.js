@@ -1,4 +1,5 @@
 const poster = new URL('night-platform.jpg',import.meta.url).href;
+const roomPhoto = new URL('daylight-room.jpg',import.meta.url).href;
 const board = new URL('sample-board.jpg',import.meta.url).href;
 const assetURL = file => '/media/'+encodeURIComponent(file);
 const sans = 'Inter, -apple-system, "PingFang SC", sans-serif';
@@ -49,8 +50,8 @@ function shotRef(work) {
 }
 
 export function makeArt() {
-  const wall=canvas(2800,670), main=canvas(1280,800);
-  let still, samples, projectCover, currentWork, projectShots=[];
+  const wall=canvas(2800,670), main=canvas(1280,800), room=canvas(1280,800);
+  let still, samples, daylight, projectCover, currentWork, projectShots=[];
   function draw(work=currentWork) {
     currentWork=work;
     const title=work?.title||'末班车之后';
@@ -65,8 +66,8 @@ export function makeArt() {
     box(ctx,0,0,2800,670,background);
     box(ctx,14,14,2772,642,'#232425',15);
     const halo=ctx.createLinearGradient(20,0,2770,550);
-    halo.addColorStop(0,'#624432'); halo.addColorStop(.19,'#332d2a');
-    halo.addColorStop(.66,'#1c272c'); halo.addColorStop(1,'#313738');
+    halo.addColorStop(0,'#3e8a9f'); halo.addColorStop(.19,'#185993');
+    halo.addColorStop(.66,'#174271'); halo.addColorStop(1,'#2e5b87');
     box(ctx,19,19,2762,632,halo,12);
     box(ctx,34,51,2732,1,'#a79b893d');
     text(ctx,'Luma 流幕',76,43,16,'#eee4d6',650);
@@ -144,16 +145,21 @@ export function makeArt() {
     text(m,'00:00:00 / '+String(work?running:15).padStart(2,'0')+' s',playX+52*scale,playY+7*scale,16*scale,'#c9c2b9');
     text(m,(work?shots.length:3)+' 镜',width-inset*5,playY+7*scale,16*scale,'#c9c2b9');
   }
-  return {wall,main,
+  function drawRoom() {
+    crop(room.getContext('2d'),daylight,0,0,room.width,room.height);
+  }
+  return {wall,main,room,
     resize(aspect) {
       const width=Math.min(1440,Math.max(270,Math.round(800*aspect)));
       if(main.width===width)return false;
-      main.width=width;draw();
+      main.width=room.width=width;draw();drawRoom();
       return true;
     },
     async load(work) {
-      still ||= await loadImage(poster);
-      samples ||= await loadImage(board);
+      if (!daylight) {
+        [still,samples,daylight]=await Promise.all([loadImage(poster),loadImage(board),loadImage(roomPhoto)]);
+        drawRoom();
+      }
       if(work){
         const file=shotRef(work)?.image;
         [projectCover,...projectShots]=await Promise.all([
