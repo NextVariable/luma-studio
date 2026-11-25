@@ -15,9 +15,11 @@ const cross = (a,b) => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]
 const dot = (a,b) => a.reduce((sum,x,i) => sum+x*b[i], 0);
 
 export function cameraAt(progress, aspect, pointer = [0, 0]) {
-  const focal = 1 / Math.tan(39 * Math.PI / 360);
-  const dockDistance = MAIN_WIDTH * focal / (2 * aspect);
-  const wideDistance = Math.max(21.5, dockDistance * 1.82);
+  const fieldOfView=mix(43,39,ramp(.20,.74,progress));
+  const focal=1/Math.tan(fieldOfView*Math.PI/360);
+  const dockFocal=1/Math.tan(39*Math.PI/360);
+  const dockDistance=MAIN_WIDTH*dockFocal/(2*aspect);
+  const wideDistance=Math.max(22, dockDistance*1.88);
   const travel = ramp(0, 1, progress);
   const straighten = 1 - ramp(.24, .72, progress);
   const eye = [(-3.9 + pointer[0] * .6)*straighten, (1.5 + pointer[1]*.3)*straighten,
@@ -51,7 +53,7 @@ varying vec2 vRay;
 uniform vec3 uEye,uRight,uUp,uForward;
 uniform vec3 uPlateEye,uPlateRight,uPlateUp,uPlateForward;
 uniform vec2 uLens;
-uniform float uTime,uRoomBlend;
+uniform float uTime,uRoomBlend,uPlateFocal;
 uniform sampler2D uPlate;
 float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
 float noise(vec2 p){
@@ -123,7 +125,7 @@ void main(){
   float sofa=boxEntry(uEye,d,vec3(-3.3,-2.84,12.9),vec3(9.3,-1.20,16.4));
   vec3 at=uEye+d*min(t,sofa)-uPlateEye;
   float depth=max(.02,dot(at,uPlateForward));
-  vec2 point=vec2(dot(at,uPlateRight)*uLens.y/uLens.x,-dot(at,uPlateUp)*uLens.y)/depth*.5+.5;
+  vec2 point=vec2(dot(at,uPlateRight)/uLens.x,-dot(at,uPlateUp))*uPlateFocal/depth*.5+.5;
   vec2 edge=min(point,1.-point);
   float inPlate=smoothstep(-.045,-.002,min(edge.x,edge.y));
   vec3 photo=texture2D(uPlate,point).rgb;
@@ -169,9 +171,11 @@ void main(){
   if(uPortal<.5&&length(corner)>1.0)discard;
   vec3 color=texture2D(uImage,vUV).rgb;
   float edge=smoothstep(.0,.005,min(vUV.x,1.-vUV.x))*smoothstep(.0,.012,min(vUV.y,1.-vUV.y));
-  float glint=exp(-pow((vUV.x-.17-uEye.x*.085)/.19,2.))*(.3+.7*vUV.y);
+  float glint=exp(-pow((vUV.x-.28-uEye.x*.060)/.23,2.))*(.36+.64*vUV.y);
+  float rim=(1.-smoothstep(.002,.011,vUV.y))*smoothstep(.015,.06,vUV.x)*(1.-smoothstep(.94,.985,vUV.x));
   color=mix(vec3(.41,.37,.33)*(.5+.5*glint),color,edge);
-  color+=vec3(.090,.079,.066)*glint*.38*(1.-uPortal);
+  color+=vec3(.073,.065,.051)*glint*.48*(1.-uPortal);
+  color+=vec3(.24,.22,.18)*rim*glint*(1.-uPortal);
   color=mix(color,vec3(.063,.067,.074),uPortal*uDock*.83);
   if(uReflection>.5){
     float a=.115*exp(-.10*dot(vPosition.xz,vPosition.xz)/10.)
@@ -205,7 +209,7 @@ function strip(steps, position) {
 }
 
 export function makeScene(canvas, wallArt, mainArt, roomArt, actorArt) {
-  const gl = canvas.getContext('webgl',{antialias:false,alpha:false, powerPreference:'high-performance'});
+  const gl = canvas.getContext('webgl',{antialias:canvas.parentElement.clientWidth>=760,alpha:false,powerPreference:'high-performance'});
   if (!gl) throw Error('WebGL unavailable');
   const room = program(gl,roomVertex,roomFragment), screen = program(gl,screenVertex,screenFragment);
   const resources = [];
@@ -216,31 +220,44 @@ export function makeScene(canvas, wallArt, mainArt, roomArt, actorArt) {
     resources.push(() => gl.deleteBuffer(buffer));
     return buffer;
   };
-  const texture = source => {
+  const maxTexture=gl.getParameter(gl.MAX_TEXTURE_SIZE);
+  function uploadTexture(source,mipmapped) {
+    const scale=Math.min(1,maxTexture/Math.max(source.width,source.height));
+    if(scale<1){
+      const reduced=document.createElement('canvas');
+      reduced.width=Math.floor(source.width*scale);
+      reduced.height=Math.floor(source.height*scale);
+      reduced.getContext('2d').drawImage(source,0,0,reduced.width,reduced.height);
+      source=reduced;
+    }
+    gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,source);
+    if(mipmapped)gl.generateMipmap(gl.TEXTURE_2D);
+  }
+  const texture = (source,mipmapped=false) => {
     const tex=gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D,tex);
     gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,mipmapped?gl.LINEAR_MIPMAP_LINEAR:gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
-    gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,source);
+    uploadTexture(source,mipmapped);
     resources.push(() => gl.deleteTexture(tex));
     return tex;
   };
   const quad=mesh(new Float32Array([-1,-1,1,-1,-1,1,1,1]));
-  const wallShape=strip(76,(u,y) => {
+  const wallShape=strip(128,(u,y) => {
     const angle=(u-.5)*TAU/3.96;
     return [Math.sin(angle)*WALL_RADIUS,mix(-2.00,4.24,y),WALL_RADIUS*(1-Math.cos(angle))-.34];
   });
   const wall=mesh(wallShape), main=mesh(new Float32Array(20),true), actor=mesh(new Float32Array(20),true);
-  const wallTex=texture(wallArt), mainTex=texture(mainArt), roomTex=texture(roomArt);
+  const wallTex=texture(wallArt,true), mainTex=texture(mainArt), roomTex=texture(roomArt);
   const actorTex=texture(actorArt);
   const roomPoint=gl.getAttribLocation(room,'aPoint');
   const world=gl.getAttribLocation(screen,'aWorld'), uv=gl.getAttribLocation(screen,'aUV');
   const locations = p => Object.fromEntries(['Eye','Right','Up','Forward','Lens','Time','Reflection','Fade','Portal','Dock','Actor','Image']
     .map(key=>[key,gl.getUniformLocation(p,'u'+key)]));
   const roomU=locations(room), screenU=locations(screen);
-  const photoUniforms=Object.fromEntries(['Eye','Right','Up','Forward','Blend','Sampler'].map(
+  const photoUniforms=Object.fromEntries(['Eye','Right','Up','Forward','Blend','Sampler','Focal'].map(
     key=>[key,gl.getUniformLocation(room,key==='Blend'?'uRoomBlend':key==='Sampler'?'uPlate':'uPlate'+key)]));
   gl.useProgram(screen); gl.uniform1i(screenU.Image,0);
   gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
@@ -285,7 +302,8 @@ export function makeScene(canvas, wallArt, mainArt, roomArt, actorArt) {
       gl.useProgram(room); uniforms(roomU,camera,time);
       gl.uniform3fv(photoUniforms.Eye,plate.eye); gl.uniform3fv(photoUniforms.Right,plate.right);
       gl.uniform3fv(photoUniforms.Up,plate.up); gl.uniform3fv(photoUniforms.Forward,plate.forward);
-      gl.uniform1f(photoUniforms.Blend,1-ramp(.60,.94,progress));
+      gl.uniform1f(photoUniforms.Focal,plate.focal);
+      gl.uniform1f(photoUniforms.Blend,1-ramp(.70,.96,progress));
       gl.uniform1i(photoUniforms.Sampler,0);
       gl.bindTexture(gl.TEXTURE_2D,roomTex);
       gl.bindBuffer(gl.ARRAY_BUFFER,quad); gl.enableVertexAttribArray(roomPoint);
@@ -310,7 +328,7 @@ export function makeScene(canvas, wallArt, mainArt, roomArt, actorArt) {
     update() {
       for (const [tex,source] of [[wallTex,wallArt],[mainTex,mainArt],[roomTex,roomArt]]) {
         gl.bindTexture(gl.TEXTURE_2D,tex);
-        gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,source);
+        uploadTexture(source,tex===wallTex);
       }
     },
     dispose() {

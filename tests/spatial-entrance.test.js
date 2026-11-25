@@ -20,6 +20,7 @@ test('scroll depth advances the real camera and keeps reversible spatial coordin
   const {cameraAt,portalRect}=await renderer;
   const aspect=1440/900;
   const outward=cameraAt(.2,aspect,[.5,-.1]);
+  assert.ok(outward.focal<cameraAt(1,aspect).focal);
   const inward=cameraAt(.5,aspect,[.5,-.1]);
   assert.ok(outward.eye[2]>inward.eye[2]);
   assert.ok(portalRect(outward,1440,900)[2]<portalRect(inward,1440,900)[2]);

@@ -101,8 +101,9 @@ function showEntrance({reverse=false,source}={}) {
       frame=requestAnimationFrame(render);
       return;
     }
-    // Limit pixel count on high-DPI panels instead of allocating post-processing buffers.
-    const ratio=Math.min(devicePixelRatio,1.55,Math.sqrt(1900000/(width*height)));
+    // Render at Retina density where the viewport budget permits. Touch layouts use fewer pixels.
+    const pixelBudget=width<760?2100000:3900000;
+    const ratio=Math.min(devicePixelRatio,2,Math.sqrt(pixelBudget/(width*height)));
     const w=Math.round(width*ratio),h=Math.round(height*ratio);
     if (canvas.width!==w||canvas.height!==h) {canvas.width=w;canvas.height=h;}
     pointer=pointer.map((value,i)=>value+(target[i]-value)*.09);

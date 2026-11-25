@@ -34,6 +34,7 @@ function crop(ctx,image,x,y,w,h,cell) {
   if (!image) return box(ctx,x,y,w,h,'#272d30');
   const clipWidth=cell===undefined?image.width:image.width/3, clipHeight=image.height;
   const ratio=Math.max(w/clipWidth,h/clipHeight);
+  ctx.imageSmoothingQuality='high';
   const cw=w/ratio,ch=h/ratio;
   ctx.drawImage(image,clipWidth*(cell??0)+(clipWidth-cw)/2,(clipHeight-ch)/2,cw,ch,x,y,w,h);
 }
@@ -51,7 +52,7 @@ function shotRef(work) {
 }
 
 export function makeArt() {
-  const wall=canvas(2800,670), main=canvas(1280,800), room=canvas(1280,800), actor=canvas(720,480);
+  const wall=canvas(4096,1024), main=canvas(1280,800), room=canvas(1980,1200), actor=canvas(960,640);
   let still, samples, daylight, projectCover, currentWork, projectShots=[];
   function draw(work=currentWork) {
     currentWork=work;
@@ -61,6 +62,7 @@ export function makeArt() {
     const shot=shotRef(work);
     const artNotes=work?.creative_brief?.style||(work?'为这一场确定光线、人物动作和视线。':'雨夜站台，保持同场光线与人物视线。');
     const ctx=wall.getContext('2d');
+    ctx.setTransform(wall.width/2800,0,0,wall.height/670,0,0);
     const background=ctx.createLinearGradient(0,0,1400,670);
     background.addColorStop(0,'#47352d'); background.addColorStop(.46,'#292527');
     background.addColorStop(1,'#161a1c');
@@ -153,7 +155,9 @@ export function makeArt() {
     resize(aspect) {
       const width=Math.min(1440,Math.max(270,Math.round(800*aspect)));
       if(main.width===width)return false;
-      main.width=room.width=width;draw();drawRoom();
+      main.width=width;
+      room.width=Math.round(width*1.5);
+      draw();drawRoom();
       return true;
     },
     async load(work) {
