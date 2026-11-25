@@ -87,7 +87,8 @@ function showEntrance({reverse=false,source}={}) {
     const width=intro.clientWidth, height=intro.clientHeight;
     const range=intro.scrollHeight-height;
     if (reverseFrom!==undefined) {
-      const t=Math.min(1,(now-reverseFrom)/1450);
+      // The first paint can carry a timestamp from before texture upload completed.
+      const t=Math.min(1,Math.max(0,(now-reverseFrom)/1450));
       intro.scrollTop=range*.988*(1-t);
       if (t===1) reverseFrom=undefined;
     }
