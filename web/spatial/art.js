@@ -1,4 +1,5 @@
 const poster = new URL('night-platform.jpg',import.meta.url).href;
+const seatedCreator = new URL('seated-creator.png',import.meta.url).href;
 const roomPhoto = new URL('daylight-room.jpg',import.meta.url).href;
 const board = new URL('sample-board.jpg',import.meta.url).href;
 const assetURL = file => '/media/'+encodeURIComponent(file);
@@ -50,7 +51,7 @@ function shotRef(work) {
 }
 
 export function makeArt() {
-  const wall=canvas(2800,670), main=canvas(1280,800), room=canvas(1280,800);
+  const wall=canvas(2800,670), main=canvas(1280,800), room=canvas(1280,800), actor=canvas(720,480);
   let still, samples, daylight, projectCover, currentWork, projectShots=[];
   function draw(work=currentWork) {
     currentWork=work;
@@ -148,7 +149,7 @@ export function makeArt() {
   function drawRoom() {
     crop(room.getContext('2d'),daylight,0,0,room.width,room.height);
   }
-  return {wall,main,room,
+  return {wall,main,room,actor,
     resize(aspect) {
       const width=Math.min(1440,Math.max(270,Math.round(800*aspect)));
       if(main.width===width)return false;
@@ -157,7 +158,10 @@ export function makeArt() {
     },
     async load(work) {
       if (!daylight) {
-        [still,samples,daylight]=await Promise.all([loadImage(poster),loadImage(board),loadImage(roomPhoto)]);
+        const [posterImage,boardImage,roomImage,person]=await Promise.all(
+          [poster,board,roomPhoto,seatedCreator].map(loadImage));
+        still=posterImage; samples=boardImage; daylight=roomImage;
+        if(person)actor.getContext('2d').drawImage(person,0,0,actor.width,actor.height);
         drawRoom();
       }
       if(work){

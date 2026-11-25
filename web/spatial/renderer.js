@@ -150,11 +150,20 @@ void main(){
 const screenFragment = `
 precision highp float;
 uniform sampler2D uImage;
-uniform float uReflection,uFade,uTime,uPortal,uDock;
+uniform float uReflection,uFade,uTime,uPortal,uDock,uActor;
 uniform vec3 uEye;
 varying vec2 vUV;
 varying vec3 vPosition;
 void main(){
+  if(uActor>.5){
+    vec4 person=texture2D(uImage,vUV);
+    // Hide the lower body along the sloping near edge of the sofa back.
+    float sofaEdge=mix(1.0,.76,vUV.x);
+    person.a *= (1.-smoothstep(sofaEdge-.014,sofaEdge,vUV.y))*uFade;
+    if(person.a<.015)discard;
+    gl_FragColor=person;
+    return;
+  }
   vec2 size=vec2(.991,.977);
   vec2 corner=max(abs(vUV-.5)-size*.5+vec2(.006,.018),0.)/vec2(.006,.018);
   if(uPortal<.5&&length(corner)>1.0)discard;
@@ -195,7 +204,7 @@ function strip(steps, position) {
   return new Float32Array(vertices);
 }
 
-export function makeScene(canvas, wallArt, mainArt, roomArt) {
+export function makeScene(canvas, wallArt, mainArt, roomArt, actorArt) {
   const gl = canvas.getContext('webgl',{antialias:false,alpha:false, powerPreference:'high-performance'});
   if (!gl) throw Error('WebGL unavailable');
   const room = program(gl,roomVertex,roomFragment), screen = program(gl,screenVertex,screenFragment);
@@ -223,11 +232,12 @@ export function makeScene(canvas, wallArt, mainArt, roomArt) {
     const angle=(u-.5)*TAU/3.96;
     return [Math.sin(angle)*WALL_RADIUS,mix(-2.00,4.24,y),WALL_RADIUS*(1-Math.cos(angle))-.34];
   });
-  const wall=mesh(wallShape), main=mesh(new Float32Array(20),true);
+  const wall=mesh(wallShape), main=mesh(new Float32Array(20),true), actor=mesh(new Float32Array(20),true);
   const wallTex=texture(wallArt), mainTex=texture(mainArt), roomTex=texture(roomArt);
+  const actorTex=texture(actorArt);
   const roomPoint=gl.getAttribLocation(room,'aPoint');
   const world=gl.getAttribLocation(screen,'aWorld'), uv=gl.getAttribLocation(screen,'aUV');
-  const locations = p => Object.fromEntries(['Eye','Right','Up','Forward','Lens','Time','Reflection','Fade','Portal','Dock','Image']
+  const locations = p => Object.fromEntries(['Eye','Right','Up','Forward','Lens','Time','Reflection','Fade','Portal','Dock','Actor','Image']
     .map(key=>[key,gl.getUniformLocation(p,'u'+key)]));
   const roomU=locations(room), screenU=locations(screen);
   const photoUniforms=Object.fromEntries(['Eye','Right','Up','Forward','Blend','Sampler'].map(
@@ -239,29 +249,40 @@ export function makeScene(canvas, wallArt, mainArt, roomArt) {
     gl.uniform3fv(u.Up,camera.up); gl.uniform3fv(u.Forward,camera.forward);
     gl.uniform2f(u.Lens,camera.aspect,camera.focal); gl.uniform1f(u.Time,time);
   };
-  function drawScreen(buffer,tex,count,reflect,isMain,fade=1) {
+  function drawScreen(buffer,tex,count,reflect,isMain,fade=1,isActor=0) {
     gl.bindBuffer(gl.ARRAY_BUFFER,buffer);
     gl.enableVertexAttribArray(world); gl.vertexAttribPointer(world,3,gl.FLOAT,false,20,0);
     gl.enableVertexAttribArray(uv); gl.vertexAttribPointer(uv,2,gl.FLOAT,false,20,12);
     gl.uniform1f(screenU.Reflection,reflect); gl.uniform1f(screenU.Fade,fade); gl.uniform1f(screenU.Portal,isMain);
+    gl.uniform1f(screenU.Actor,isActor);
     gl.bindTexture(gl.TEXTURE_2D,tex); gl.drawArrays(gl.TRIANGLE_STRIP,0,count);
     gl.disableVertexAttribArray(world); gl.disableVertexAttribArray(uv);
   }
   let ratio;
   return {
     draw(camera,time,docking,progress) {
+      const plate=cameraAt(0,camera.aspect);
       if (ratio!==camera.aspect) {
         ratio=camera.aspect;
         gl.bindBuffer(gl.ARRAY_BUFFER,main);
         // Portrait screens keep a compact viewing composition. Near the portal
         // the native workbench assumes the exact viewport dimensions.
         gl.bufferSubData(gl.ARRAY_BUFFER,0,strip(1,(u,y) => [(u-.5)*MAIN_WIDTH,(y-.5)*MAIN_WIDTH/ratio,MAIN_Z]));
+        // Place the cutout in the initial camera's view plane, in front of the curved display.
+        const depth=11.5, height=.348, width=height*actorArt.width/actorArt.height/ratio;
+        const center=ratio<.8?.69:.684, top=ratio<.8?.46:.398;
+        const person=strip(1,(u,y)=>{
+          const x=(2*(center+(u-.5)*width)-1)*ratio*depth/plate.focal;
+          const v=(1-2*(top+(1-y)*height))*depth/plate.focal;
+          return plate.eye.map((position,i)=>position + plate.forward[i]*depth + plate.right[i]*x + plate.up[i]*v);
+        });
+        gl.bindBuffer(gl.ARRAY_BUFFER,actor);
+        gl.bufferSubData(gl.ARRAY_BUFFER,0,person);
       }
       gl.viewport(0,0,canvas.width,canvas.height);
       gl.clear(gl.DEPTH_BUFFER_BIT);
       gl.disable(gl.BLEND); gl.disable(gl.DEPTH_TEST);
       gl.useProgram(room); uniforms(roomU,camera,time);
-      const plate=cameraAt(0,camera.aspect);
       gl.uniform3fv(photoUniforms.Eye,plate.eye); gl.uniform3fv(photoUniforms.Right,plate.right);
       gl.uniform3fv(photoUniforms.Up,plate.up); gl.uniform3fv(photoUniforms.Forward,plate.forward);
       gl.uniform1f(photoUniforms.Blend,1-ramp(.60,.94,progress));
@@ -279,6 +300,12 @@ export function makeScene(canvas, wallArt, mainArt, roomArt) {
       }
       gl.disable(gl.BLEND); gl.enable(gl.DEPTH_TEST);
       drawScreen(wall,wallTex,wallShape.length/5,0,0); drawScreen(main,mainTex,4,0,1);
+      const foreground=1-ramp(.33,.59,progress);
+      if(foreground>0){
+        gl.enable(gl.BLEND); gl.depthMask(false);
+        drawScreen(actor,actorTex,4,0,0,foreground,1);
+        gl.depthMask(true);
+      }
     },
     update() {
       for (const [tex,source] of [[wallTex,wallArt],[mainTex,mainArt],[roomTex,roomArt]]) {

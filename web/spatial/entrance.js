@@ -1,7 +1,7 @@
 import { cameraAt, makeScene, portalRect, ramp } from './renderer.js';
 import { makeArt } from './art.js';
 
-const SEEN = 'luma:spatial-entrance-v1';
+const SEEN = 'luma:spatial-entrance-v2';
 const LINK = new URL(location.href);
 const preview = document.documentElement.hasAttribute('data-spatial-preview');
 const replay = LINK.searchParams.get('entrance')==='1';
@@ -18,7 +18,8 @@ function remember() {
     history.replaceState(history.state,'',LINK);
   }
 }
-function showEntrance() {
+function showEntrance({reverse=false}={}) {
+  if (document.querySelector('.spatial-entrance')) return;
   const intro=document.createElement('section');
   intro.className='spatial-entrance spatial-fallback';
   intro.setAttribute('aria-label','流幕开场');
@@ -31,7 +32,8 @@ function showEntrance() {
         <div class="spatial-bottom">
           <h1 class="spatial-title spatial-visually-hidden">Enter your studio.</h1>
           <div class="spatial-actions">
-            <button class="spatial-scroll" type="button" hidden>滚动进入 <i aria-hidden="true"></i></button>
+            <button class="spatial-scroll spatial-backward" type="button" hidden><i aria-hidden="true"></i>后退</button>
+            <button class="spatial-scroll spatial-forward" type="button" hidden>前进 <i aria-hidden="true"></i></button>
             <button class="spatial-enter" type="button">进入工作室 <span aria-hidden="true">↗</span></button>
           </div>
         </div>
@@ -42,7 +44,8 @@ function showEntrance() {
   surface.inert=true;
   const canvas=intro.querySelector('canvas');
   const chrome=intro.querySelector('.spatial-chrome');
-  const hint=intro.querySelector('.spatial-scroll');
+  const backward=intro.querySelector('.spatial-backward');
+  const forward=intro.querySelector('.spatial-forward');
   const bar=intro.querySelector('.spatial-progress');
   const title=intro.querySelector('.spatial-title');
   const brand=intro.querySelector('.spatial-brand');
@@ -50,7 +53,8 @@ function showEntrance() {
   const life=new AbortController();
   let scene, frame, alive=true, workspaceReady=false, waitingForStudio=false, pointer=[0,0], target=[0,0];
   const clock=performance.now();
-  let lastDraw=0;
+  let lastDraw=0, reverseFrom;
+  if (reverse && !reduced.matches) intro.style.visibility='hidden';
   const on=(node,event,fn,options={})=>node.addEventListener(event,fn,{...options,signal:life.signal});
   function unmap() {
     if (!surface.classList.contains('spatial-portal')) return;
@@ -73,7 +77,8 @@ function showEntrance() {
     const previous=scene; scene=null; previous?.dispose();
     intro.classList.add('spatial-fallback');
     intro.scrollTop=0;
-    canvas.hidden=true; hint.hidden=true; bar.hidden=true;
+    intro.style.removeProperty('visibility');
+    canvas.hidden=true; backward.hidden=forward.hidden=bar.hidden=true;
     for (const el of [chrome,title,brand,enterButton]) el.style.removeProperty('opacity');
     enterButton.disabled=false;
   }
@@ -81,6 +86,11 @@ function showEntrance() {
     if (!alive || !scene) return;
     const width=intro.clientWidth, height=intro.clientHeight;
     const range=intro.scrollHeight-height;
+    if (reverseFrom!==undefined) {
+      const t=Math.min(1,(now-reverseFrom)/1450);
+      intro.scrollTop=range*.988*(1-t);
+      if (t===1) reverseFrom=undefined;
+    }
     const progress=Math.min(1,Math.max(0,intro.scrollTop/Math.max(1,range)));
     if (progress>=.999 && workspaceReady) return close();
     if (progress>=.999) waitingForStudio=true;
@@ -102,7 +112,7 @@ function showEntrance() {
     }
     title.style.opacity=brand.style.opacity=String(1-ramp(.26,.66,p));
     enterButton.style.opacity=String(1-.40*ramp(.45,.83,p));
-    hint.hidden=p>.46;
+    backward.disabled=p<=.005; forward.disabled=p>=.998;
     bar.style.setProperty('--progress',p.toFixed(3));
     if (workspaceReady && p>.76) {
       const [x,y,rw,rh]=portalRect(camera,width,height);
@@ -113,7 +123,15 @@ function showEntrance() {
     frame=requestAnimationFrame(render);
   }
   on(enterButton,'click',close);
-  on(hint,'click',()=>intro.scrollBy({top:intro.clientHeight*.86,behavior:'smooth'}));
+  const stopReverse=()=>{reverseFrom=undefined;};
+  const move=direction=>{
+    stopReverse();
+    intro.scrollBy({top:direction*intro.clientHeight*.86,behavior:'smooth'});
+  };
+  on(forward,'click',()=>move(1));
+  on(backward,'click',()=>move(-1));
+  on(intro,'wheel',stopReverse,{passive:true});
+  on(intro,'touchstart',stopReverse,{passive:true});
   on(intro,'pointermove',event=>{
     if(event.pointerType==='mouse')target=[event.clientX/Math.max(1,intro.clientWidth)*2-1,
       1-event.clientY/Math.max(1,intro.clientHeight)*2];
@@ -126,6 +144,7 @@ function showEntrance() {
                !(event.key===' '&&event.target.closest('button'))) {
       event.preventDefault(); event.stopImmediatePropagation();
       if (!scene) return;
+      stopReverse();
       const amount=event.key==='Home'?-intro.scrollHeight:event.key==='End'?intro.scrollHeight:
         intro.clientHeight*(event.key.startsWith('Page')||event.key===' '?.82:.22);
       intro.scrollBy({top:['ArrowUp','PageUp'].includes(event.key)?-amount:amount,behavior:'smooth'});
@@ -161,9 +180,18 @@ function showEntrance() {
     if (initial) await art.load(initial);
     if (!alive || reduced.matches) return;
     try {
-      scene=makeScene(canvas,art.wall,art.main,art.room);
-      intro.classList.remove('spatial-fallback'); canvas.hidden=false; hint.hidden=false; bar.hidden=false;
-      frame=requestAnimationFrame(render);
+      scene=makeScene(canvas,art.wall,art.main,art.room,art.actor);
+      intro.classList.remove('spatial-fallback');
+      canvas.hidden=backward.hidden=forward.hidden=bar.hidden=false;
+      if (reverse) {
+        intro.scrollTop=(intro.scrollHeight-intro.clientHeight)*.988;
+        reverseFrom=performance.now();
+      }
+      frame=requestAnimationFrame(now=>{
+        render(now);
+        intro.style.removeProperty('visibility');
+        if(reverse)intro.focus({preventScroll:true});
+      });
       ready.then(async()=>{
         const current=work();
         if (!current || current===initial || !alive || !scene) return;
@@ -177,5 +205,7 @@ function showEntrance() {
     }
   }).catch(fallback);
 }
+
+if (surface && window.L) window.L.returnToSpace=()=>showEntrance({reverse:true});
 
 if (surface && LINK.searchParams.get('entrance')!=='off' && (preview||replay||!seen())) showEntrance();

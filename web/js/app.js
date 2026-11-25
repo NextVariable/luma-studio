@@ -66,8 +66,10 @@ L.renderTop=()=>{
   const sp=L.S.data.spending;
   $('#context').innerHTML=inProject?`<button class="switch" id="sw-project" aria-haspopup="menu"><b>${esc(p.title)}</b>${L.chev}</button>
     <span class="faint">/</span><button class="switch" id="sw-episode" aria-haspopup="menu"><b>${esc(ep.title)}</b>${L.chev}</button>`:'';
-  $('#top-actions').innerHTML=inProject?`<button class="btn ghost small" id="quota">${sp.remaining?'<span class="num">生成额度 '+sp.remaining+'</span>':'生成已暂停'}</button>
-    ${L.S.view==='delivery'?'':'<button class="btn small" id="to-delivery">去成片</button>'}`:'';
+  $('#top-actions').innerHTML=(inProject?`<button class="btn ghost small" id="quota">${sp.remaining?'<span class="num">生成额度 '+sp.remaining+'</span>':'生成已暂停'}</button>
+    ${L.S.view==='delivery'?'':'<button class="btn small" id="to-delivery">去成片</button>'}`:'')+
+    '<button class="btn ghost small" id="spatial-return" aria-label="后退到空间">后退</button>';
+  $('#spatial-return').onclick=()=>L.returnToSpace?.();
   $$('[data-view]',$('#rail')).forEach(b=>b.onclick=()=>L.go(b.dataset.view));
   $('#brand').onclick=()=>L.go('library');
   $('#settings-btn').onclick=L.settingsDialog;

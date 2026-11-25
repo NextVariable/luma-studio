@@ -33,3 +33,6 @@
   .spatial-actions{grid-column:1;justify-content:space-between}
 }
 @media (prefers-reduced-motion:reduce){.spatial-enter{transition:none}}
+
+.spatial-scroll:disabled{opacity:.45;cursor:default}
+.spatial-backward i{transform:rotate(225deg);margin-top:3px}
