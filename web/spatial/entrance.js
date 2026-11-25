@@ -18,7 +18,7 @@ function remember() {
     history.replaceState(history.state,'',LINK);
   }
 }
-function showEntrance({reverse=false}={}) {
+function showEntrance({reverse=false,source}={}) {
   if (document.querySelector('.spatial-entrance')) return;
   const intro=document.createElement('section');
   intro.className='spatial-entrance spatial-fallback';
@@ -92,7 +92,10 @@ function showEntrance({reverse=false}={}) {
       if (t===1) reverseFrom=undefined;
     }
     const progress=Math.min(1,Math.max(0,intro.scrollTop/Math.max(1,range)));
-    if (progress>=.999 && workspaceReady) return close();
+    if (progress>=.999 && workspaceReady) {
+      if (window.L) window.L.spatialWheelUntil=performance.now()+170;
+      return close();
+    }
     if (progress>=.999) waitingForStudio=true;
     if (document.hidden || width===0 || height===0) {
       frame=requestAnimationFrame(render);
@@ -130,7 +133,13 @@ function showEntrance({reverse=false}={}) {
   };
   on(forward,'click',()=>move(1));
   on(backward,'click',()=>move(-1));
-  on(intro,'wheel',stopReverse,{passive:true});
+  on(intro,'wheel',event=>{
+    if(reverseFrom!==undefined&&source==='wheel'&&event.deltaY<0&&!event.ctrlKey){
+      event.preventDefault();
+      return;
+    }
+    stopReverse();
+  },{passive:false});
   on(intro,'touchstart',stopReverse,{passive:true});
   on(intro,'pointermove',event=>{
     if(event.pointerType==='mouse')target=[event.clientX/Math.max(1,intro.clientWidth)*2-1,
@@ -206,6 +215,6 @@ function showEntrance({reverse=false}={}) {
   }).catch(fallback);
 }
 
-if (surface && window.L) window.L.returnToSpace=()=>showEntrance({reverse:true});
+if (surface && window.L) window.L.returnToSpace=({source}={})=>showEntrance({reverse:true,source});
 
 if (surface && LINK.searchParams.get('entrance')!=='off' && (preview||replay||!seen())) showEntrance();

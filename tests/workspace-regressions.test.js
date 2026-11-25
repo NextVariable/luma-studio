@@ -368,3 +368,46 @@ test('a trusted interaction unlocks swipe audio, and reversal replaces the previ
   ctx.L.sfx('swipe',1);
   assert.equal(starts.length,3);
 });
+
+test('reverse wheel returns to the entrance only after reaching the first workspace page and scroll edge',()=>{
+  const events={};
+  const view={addEventListener:(name,handler)=>{events[name]=handler;},focus(){}};
+  const state={view:'script',pid:'project'};
+  let now=0,scrollable=false,dialog=false;
+  const returns=[];
+  const ctx=vm.createContext({
+    document:{addEventListener(){}},setInterval(){},performance:{now:()=>now},
+    L:{$:()=>view,S:state,project:()=>({}),pagingBlocked:()=>dialog,
+      remember(){},sfx(){},swap:(_,__,change)=>change(),
+      returnToSpace:({source})=>returns.push(source),refresh:()=>new Promise(()=>{})},
+  });
+  run(ctx,'gesture.js');
+  run(ctx,'app.js');
+  ctx.L.render=()=>{};
+  ctx.L.canScrollWithin=()=>scrollable;
+  function wheel(magnitude=-18){
+    let consumed=false;
+    events.wheel({deltaY:magnitude,deltaX:0,deltaMode:0,target:{closest:()=>null},
+      currentTarget:view,preventDefault:()=>{consumed=true;}});
+    return consumed;
+  }
+  assert.equal(wheel(),true);
+  assert.equal(state.view,'library');
+  now=25;
+  wheel(-4);
+  assert.deepEqual(returns,[]);
+  now=200;
+  scrollable=true;
+  assert.equal(wheel(),false);
+  scrollable=false;
+  now=225;
+  wheel(-3);
+  assert.deepEqual(returns,[]);
+  now=400;
+  dialog=true;
+  assert.equal(wheel(),false);
+  dialog=false;
+  now=600;
+  assert.equal(wheel(),true);
+  assert.deepEqual(returns,['wheel']);
+});

@@ -117,24 +117,31 @@ const gestureArea=(target,mobile)=>{
   const shotArea=L.S.view==='shots'&&(target.closest('#stage')||(!mobile&&target.closest('.strip')));
   return shotArea?{scope:'shot',boundary:shotArea}:{scope:'page',boundary:viewEl};
 };
-const step=(scope,direction,touch=false)=>{
+const step=(scope,direction,touch=false,source)=>{
   const index=scope==='shot'?L.shots().findIndex(shot=>shot.id===L.S.sid):ORDER.indexOf(L.S.view);
+  if(scope==='page'&&index===0&&direction<0)return L.returnToSpace?.({source});
   return L.goTo(index+direction,{scope,touch});
 };
 const pageWheel=event=>{
   if(event.defaultPrevented||event.ctrlKey)return;
   const mobile=L.mobilePaging();
-  const along=mobile?event.deltaX:event.deltaY,across=mobile?event.deltaY:event.deltaX;
+  const verticalReturn=mobile&&L.S.view==='library'&&event.deltaY<0&&Math.abs(event.deltaY)>Math.abs(event.deltaX);
+  const axis=mobile&&!verticalReturn?'x':'y';
+  const along=axis==='x'?event.deltaX:event.deltaY,across=axis==='x'?event.deltaY:event.deltaX;
   if(Math.abs(along)<=Math.abs(across))return;
-  const delta=L.wheelPixels(event,mobile?'x':'y');
+  const delta=L.wheelPixels(event,axis);
   if(mobile&&event.currentTarget!==viewEl)return;
   const {scope,boundary}=gestureArea(event.target,mobile);
   const control=event.target.closest(scrollControls+(mobile?',.strip':',textarea:focus'));
-  const scrolling=gestureBlocked()||!!control||(!mobile&&L.canScrollWithin(event.target,delta,boundary));
+  const scrolling=gestureBlocked()||!!control||(axis==='y'&&L.canScrollWithin(event.target,delta,boundary));
+  if(!scrolling&&delta>0&&performance.now()<(L.spatialWheelUntil||0)){
+    event.preventDefault();
+    return;
+  }
   const direction=wheel(delta,performance.now(),{scrolling,discrete:event.deltaMode!==0,pointer:{x:event.clientX,y:event.clientY}});
   if(scrolling)return;
   event.preventDefault();
-  if(direction)step(scope,direction);
+  if(direction)step(scope,direction,false,'wheel');
 };
 for(const surface of new Set([viewEl,$('.topbar'),$('#rail')].filter(Boolean))){
   surface.addEventListener('wheel',pageWheel,{passive:false});
@@ -147,7 +154,8 @@ viewEl.addEventListener('touchstart',event=>{
   const {scope,boundary}=gestureArea(event.target,mobile);
   const axis=mobile?'x':'y';
   touch={point:event.touches[0],scope,axis,
-    up:axis==='y'&&L.canScrollWithin(event.target,-1,boundary),
+    up:(axis==='y'||L.S.view==='library')&&L.canScrollWithin(event.target,-1,boundary),
+    pullBack:mobile&&L.S.view==='library',
     down:axis==='y'&&L.canScrollWithin(event.target,1,boundary),consumed:false};
 },{passive:true});
 viewEl.addEventListener('touchmove',event=>{
@@ -155,7 +163,8 @@ viewEl.addEventListener('touchmove',event=>{
   if(!touch)return;
   if(touch.consumed){if(event.cancelable)event.preventDefault();return}
   const point=event.touches[0];
-  const {axis}=touch;
+  const vertical=touch.pullBack&&L.swipeDirection(touch.point,point,5,'y');
+  const axis=vertical<0?'y':touch.axis;
   const intent=L.swipeDirection(touch.point,point,5,axis);
   if(!intent){
     if(L.swipeDirection(touch.point,point,5,axis==='x'?'y':'x'))touch=null;
